@@ -32,6 +32,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { GeneratingLoader } from "@/components/ui/generating-loader";
 import { PromptForm } from "@/components/genblaze/prompt-form";
 import { cn } from "@/lib/utils";
+import { playbackUrl } from "@/lib/api-client";
 import type { Asset } from "@/types/pipeline";
 import type { Scene, StoryboardSpec } from "@/types/storyboard";
 import type { SceneSlots } from "@/components/genblaze/scene-strip";
