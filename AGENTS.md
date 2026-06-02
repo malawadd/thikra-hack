@@ -80,18 +80,24 @@ shape is intentional — one fewer dependency layer, matches production
 media pipelines). Call the composer from `main.py` via
 `asyncio.to_thread(...)` so the FastAPI event loop never blocks.
 
-### Rule 7: preflight stays on
+### Rule 7: preflight stays on for the ESSENTIAL pipelines
 
-Every Pipeline (Stages B1 + B2) is constructed with the default
-`preflight=True`. This catches misconfigured `OPENAI_API_KEY` /
-`NVIDIA_API_KEY` / `DECART_API_KEY` / `GMI_API_KEY` before any paid call
-fires. Do not set `preflight=False` — the nvidia-nemotron-genblaze-b2
-precedent applies only to known-retired model ids, not to general dev
-convenience.
+The essential pipelines — B0 (reference) and B1 (keyframes) — are
+constructed with the default `preflight=True`. This catches a misconfigured
+`OPENAI_API_KEY` before any paid call fires. Do not set `preflight=False` on
+these for dev convenience.
+
+**Stage B2 (video + TTS + music) is the deliberate exception:** it is built
+`preflight=False` and run `fail_fast=False, raise_on_failure=False` because
+video, narration, and music are best-effort — a DEAD/failing model must be
+contained as one FAILED step (then degraded by the composer) rather than
+aborting the run at preflight, which validates *every* step. See
+ARCHITECTURE.md §"Ethos constraints" #5. Keep this divergence intentional and
+documented; do not "restore" `preflight=True` on B2.
 
 Stage A (`genblaze_openai.chat()`) has no preflight surface; a bad
 `OPENAI_API_KEY` will surface as a `ProviderError` from `chat()` itself
-on the first call.
+on the first call (classified by `app/errors.py`).
 
 ### Rule 8: env var names follow the parent standard
 

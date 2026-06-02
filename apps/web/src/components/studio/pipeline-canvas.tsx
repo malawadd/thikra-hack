@@ -20,8 +20,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowRight, FileText, Image as ImageIcon, Sparkles, Film, Music as MusicIcon,
-  Pencil, ChevronUp,
+  ArrowRight, FileText, Sparkles, Film, Music as MusicIcon,
+  Pencil, ChevronUp, Maximize2, FileJson,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +30,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { StatusPill } from "@/components/ui/status-pill";
 import { GeneratingLoader } from "@/components/ui/generating-loader";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { PromptForm } from "@/components/genblaze/prompt-form";
 import { cn } from "@/lib/utils";
 import { playbackUrl } from "@/lib/api-client";
@@ -51,6 +59,7 @@ interface PipelineCanvasProps {
   musicFailed: boolean;
   finalAsset: Asset | null;
   runId: string | null;
+  manifestUri: string | null;
   generating: boolean;
   onSubmit: (prompt: string) => void;
   onRestart: () => void;
@@ -61,14 +70,14 @@ interface PipelineCanvasProps {
 // that every tile renders under its content. Mirrors services/api/app/
 // repo/pipelines.py's stage layout.
 const META = {
-  seed:    { model: "—",                      provider: "—" },
-  script:  { model: "gpt-4.1-nano",           provider: "OpenAI chat() · response_format" },
-  ref:     { model: "gpt-image-1",            provider: "OpenAI · DalleProvider" },
-  scenes:  { model: "gpt-image-1",            provider: "OpenAI · DalleProvider" },
-  video:   { model: "lucy-pro",               provider: "Decart · DecartVideoProvider" },
+  seed:    { model: "—",                            provider: "—" },
+  script:  { model: "gpt-4.1-nano",                 provider: "OpenAI chat() · response_format" },
+  ref:     { model: "imagen-4.0-generate-001", provider: "Google · ImagenProvider" },
+  scenes:  { model: "imagen-4.0-generate-001", provider: "Google · ImagenProvider" },
+  video:   { model: "Kling-Image2Video-V2.1-Master", provider: "GMICloud · GMICloudVideoProvider" },
   tts:     { model: "nvidia/magpie-tts-multilingual", provider: "NVIDIA · NvidiaAudioProvider" },
-  music:   { model: "minimax-music-2.5",      provider: "GMICloud · GMICloudAudioProvider" },
-  compose: { model: "ffmpeg",                 provider: "local subprocess (composer.py)" },
+  music:   { model: "minimax-music-2.5",            provider: "GMICloud · GMICloudAudioProvider" },
+  compose: { model: "ffmpeg",                       provider: "local subprocess (composer.py)" },
 } as const;
 
 type TileKey = "seed" | "script" | "storyboard" | "media" | "composition";
@@ -113,24 +122,91 @@ export function PipelineCanvas(p: PipelineCanvasProps) {
     return "seed";
   })();
 
-  // Center the active tile horizontally inside the canvas whenever it
-  // changes. `inline: "center"` aligns the element to the centre of the
-  // scroll viewport without disturbing manual scrolling between
-  // transitions — the user can drag/scroll freely; the auto-snap only
-  // fires when the pipeline advances to a new stage. Reduced-motion users
-  // jump instantly instead of animating.
+  // Tracks the last time the user touched the canvas (wheel, drag, touch).
+  // The auto-snap respects this — if the user is actively scrolling, we
+  // don't yank them back to the active tile. This is what makes manual
+  // left/right scrolling actually usable while the run is in flight.
+  const lastUserScrollAt = useRef(0);
+  const isProgrammaticScroll = useRef(false);
+
+  // Wire the canvas's manual-scroll affordances: wheel events convert
+  // vertical scroll to horizontal scroll (mouse users without trackpad
+  // gestures can still navigate), and any user gesture marks
+  // `lastUserScrollAt` so the auto-snap below stays out of the way.
+  //
+  // CAPTURE PHASE is critical here. In bubble phase the wheel event has
+  // already reached descendants — if a tile has its own `overflow-y-auto`
+  // (e.g. ScriptTile's scene list) OR if any ancestor like `<main>` can
+  // scroll vertically, the browser scrolls THAT element first, so the
+  // user sees vertical scroll instead of horizontal canvas pan. Capture
+  // phase fires BEFORE the descendant/ancestor scrolls, so preventDefault
+  // here actually stops the wrong scroll from happening.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const mark = () => { lastUserScrollAt.current = Date.now(); };
+
+    const onScroll = () => {
+      if (isProgrammaticScroll.current) return;
+      mark();
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      mark();
+      // Horizontal-dominant gestures (trackpad swipe) pass through to
+      // the canvas's native horizontal scroll — don't touch them.
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      // No horizontal range = nothing to do; let the page scroll normally.
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      // Otherwise: claim the vertical wheel for the canvas. preventDefault
+      // (in capture phase) stops the page AND any inner tile from scrolling
+      // vertically; we manually map deltaY → scrollLeft so the pipeline
+      // pans horizontally regardless of where the cursor is.
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+
+    // capture: true → fire BEFORE any descendant or default scroll.
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    el.addEventListener("touchstart", mark, { passive: true });
+    el.addEventListener("pointerdown", mark, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
+      el.removeEventListener("touchstart", mark);
+      el.removeEventListener("pointerdown", mark);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, []);
+
+  // Center the active tile horizontally INSIDE the canvas whenever it
+  // changes. Uses `scrollTo` on the canvas itself (not `scrollIntoView`
+  // on the child) so the surrounding page never scrolls — fixes the
+  // "first module gets covered" bug where scrollIntoView would tug the
+  // viewport vertically and bring the sidebar back into view over the
+  // Seed tile. Skips the snap if the user has scrolled in the last 4s
+  // so manual exploration isn't fought.
   useEffect(() => {
     const root = containerRef.current;
     if (!root) return;
+    if (Date.now() - lastUserScrollAt.current < 4000) return;
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     requestAnimationFrame(() => {
       const el = root.querySelector<HTMLElement>(`[data-tile-key="${activeTile}"]`);
-      if (!el) return;
-      el.scrollIntoView({
-        behavior: reduced ? "auto" : "smooth",
-        block: "nearest",
-        inline: "center",
-      });
+      if (!el || !root) return;
+      // Compute the scrollLeft that centres `el` inside `root` without
+      // affecting any ancestor scroll position.
+      const targetLeft = el.offsetLeft - (root.clientWidth - el.offsetWidth) / 2;
+      const max = Math.max(0, root.scrollWidth - root.clientWidth);
+      const left = Math.max(0, Math.min(targetLeft, max));
+      isProgrammaticScroll.current = true;
+      root.scrollTo({ left, behavior: reduced ? "auto" : "smooth" });
+      // Clear the flag once the smooth scroll has had time to settle.
+      // 500ms covers a typical smooth-scroll duration; if a manual scroll
+      // races in during this window, it still beats programmatic intent
+      // because we don't reset on a per-event basis.
+      window.setTimeout(() => { isProgrammaticScroll.current = false; }, 500);
     });
   }, [activeTile]);
 
@@ -142,7 +218,10 @@ export function PipelineCanvas(p: PipelineCanvasProps) {
       ref={containerRef}
       className="w-full min-w-0 overflow-x-auto overscroll-x-contain pb-2"
     >
-      <ol className="flex items-stretch gap-3 min-w-max pr-6">
+      {/* items-start (not items-stretch) so tall tiles like the Storyboard
+          don't force shorter tiles (Composition, Seed-after-submit) to
+          stretch with empty space. Each tile sits at its natural height. */}
+      <ol className="flex items-start gap-3 min-w-max pr-6">
         <SeedTile p={p} />
         {showScript && <Arrow active={p.phase === "planning"} />}
         {showScript && (
@@ -173,7 +252,7 @@ export function PipelineCanvas(p: PipelineCanvasProps) {
           done={p.phase === "done"}
         />}
         {showComp && <Arrow />}
-        {showComp && <CompositionTile asset={p.finalAsset!} runId={p.runId} />}
+        {showComp && <CompositionTile asset={p.finalAsset!} runId={p.runId} manifestUri={p.manifestUri} />}
       </ol>
     </div>
   );
@@ -190,20 +269,36 @@ interface TileShellProps {
   badge?: React.ReactNode;
   /** Model + provider footer — every tile gets one for traceability. */
   meta?: { model: string; provider: string };
-  /** Extra class on the outer `<li>` — e.g. `tile-celebrate` on Composition. */
+  /** Extra class on the outer element — e.g. `tile-celebrate` on Composition. */
   className?: string;
   /** Stable stage identifier used by the canvas's auto-centering scroll. */
   tileKey?: TileKey;
+  /** Render as `<li>` (default, for top-level pipeline items) or `<div>`
+   *  (for nested sub-cards inside a media stack — avoids invalid <li>-in-<li>). */
+  as?: "li" | "div";
+  /** Override the explicit width — useful for sub-cards that inherit
+   *  width from their parent container. */
+  fullWidth?: boolean;
 }
 
-function TileShell({ title, icon: Icon, status, width = "narrow", children, badge, meta, className, tileKey }: TileShellProps) {
-  const w = width === "extra" ? "w-[480px]" : width === "wide" ? "w-[360px]" : "w-[300px]";
+function TileShell({
+  title, icon: Icon, status, width = "narrow", children, badge, meta, className, tileKey,
+  as = "li", fullWidth = false,
+}: TileShellProps) {
+  const w = fullWidth
+    ? "w-full"
+    : width === "extra"
+      ? "w-[480px]"
+      : width === "wide"
+        ? "w-[360px]"
+        : "w-[300px]";
   // Provider string in META is "Vendor · ClassName" (e.g. "OpenAI · DalleProvider").
   // Take just the vendor for the compact header chip; the full string lives
   // in the title attribute (hover tooltip) so it's still discoverable.
   const providerShort = meta?.provider.split(" · ")[0];
+  const Outer = (as === "div" ? "div" : "li") as React.ElementType;
   return (
-    <li
+    <Outer
       className={cn(
         "tile-in shrink-0 flex flex-col rounded-xl border border-border bg-card overflow-hidden transition-colors duration-300",
         w,
@@ -242,7 +337,7 @@ function TileShell({ title, icon: Icon, status, width = "narrow", children, badg
           {badge}
         </div>
       )}
-    </li>
+    </Outer>
   );
 }
 
@@ -636,32 +731,49 @@ function StoryboardTile({
             {META.ref.provider}
           </p>
         </div>
-        {/* Scene keyframes — right column, 2-col grid */}
+        {/* Scene keyframes — vertical stack of "thumbnail on top, caption
+            below". The thumbnail is the dominant element (full column
+            width, h-24); the caption sits underneath in a compact strip.
+            No internal scrollbar — the tile grows to fit (the canvas row
+            uses `items-start` so other tiles don't stretch to match). */}
         <div className="flex flex-col gap-1.5 min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Scenes ({keyframeCount}/{spec.scenes.length})
           </p>
-          <ol className="grid grid-cols-2 gap-1.5 flex-1 content-start">
+          <ol className="flex flex-col gap-2 flex-1">
             {spec.scenes.map((scene, i) => (
-              <li key={i} className="aspect-video overflow-hidden rounded-md border bg-muted relative">
-                {slots[i]?.keyframeUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={slots[i].keyframeUrl}
-                    alt=""
-                    className="h-full w-full object-cover animate-pop-in"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center">
-                    <GeneratingLoader size="sm" variant="flames" />
-                  </div>
-                )}
-                <span className="absolute bottom-1 right-1 text-[9px] font-mono text-white bg-black/50 rounded px-1">
-                  {scene.duration_sec}s
-                </span>
-                <span className="absolute top-1 left-1 text-[9px] font-mono text-white bg-black/50 rounded px-1">
-                  {i + 1}
-                </span>
+              <li
+                key={i}
+                className="rounded-md border bg-muted/30 overflow-hidden shrink-0"
+              >
+                {/* Thumbnail — the focal element. Full column width,
+                    fixed height so the image stays the visual lead. */}
+                <div className="relative h-24 w-full bg-muted">
+                  {slots[i]?.keyframeUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={slots[i].keyframeUrl}
+                      alt=""
+                      className="h-full w-full object-cover animate-pop-in"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center">
+                      <GeneratingLoader size="sm" variant="flames" />
+                    </div>
+                  )}
+                  <span className="absolute top-1 left-1 text-[10px] font-mono font-semibold text-white bg-black/60 rounded px-1.5 py-0.5">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <span className="absolute top-1 right-1 text-[10px] font-mono text-white bg-black/60 rounded px-1.5 py-0.5">
+                    {scene.duration_sec}s
+                  </span>
+                </div>
+                {/* Caption strip — sits BELOW the thumbnail (not overlaid). */}
+                <div className="px-2 py-1.5">
+                  <p className="text-[11px] font-medium leading-tight line-clamp-1">
+                    {scene.caption || "(no caption)"}
+                  </p>
+                </div>
               </li>
             ))}
           </ol>
@@ -731,131 +843,200 @@ function MediaTile({
   spec: StoryboardSpec;
   slots: SceneSlots[];
   musicUrl: string | null;
-  // Live failure flag for the music step — flips the score to "unavailable"
-  // the moment the step fails, not only at `done`.
   musicFailed: boolean;
-  // `done` = the whole run finished. Narration + music are best-effort, so
-  // readiness keys off the essential video clips; once `done` (or a step has
-  // failed live), an empty audio/video slot renders its fallback state rather
-  // than a perpetual loader.
   done: boolean;
 }) {
+  // Stage B2 runs three providers in parallel: image-to-video (Decart),
+  // narration TTS (NVIDIA), and the music score (GMICloud). Each gets its
+  // own card so the user sees the per-provider state at a glance + can
+  // tell at a glance which one is the slowest / which one fell back.
+  // The cards stack vertically inside a single horizontal-canvas slot.
+  return (
+    <li
+      data-tile-key="media"
+      className="tile-in shrink-0 w-[480px] flex flex-col gap-3"
+    >
+      <VideoStackCard spec={spec} slots={slots} done={done} />
+      <TtsStackCard spec={spec} slots={slots} done={done} />
+      <MusicStackCard
+        spec={spec}
+        musicUrl={musicUrl}
+        musicFailed={musicFailed}
+        done={done}
+      />
+    </li>
+  );
+}
+
+function VideoStackCard({
+  spec, slots, done,
+}: { spec: StoryboardSpec; slots: SceneSlots[]; done: boolean }) {
   const clipsReady = slots.filter((s) => s.clipUrl).length;
   const total = spec.scenes.length;
-  const allDone = clipsReady === total;
+  const allReady = clipsReady === total;
+  const anyFailed = slots.some((s) => s.videoFailed);
   return (
     <TileShell
-      title="Video + TTS + Music"
+      as="div"
+      fullWidth
+      title="Video"
       icon={Film}
-      status={allDone ? "ready" : "active"}
-      width="extra"
-      tileKey="media"
-      badge={
-        allDone
-          ? <StatusPill tone="green">ready</StatusPill>
-          : <StatusPill tone="active" dot>{clipsReady}/{total} clips</StatusPill>
-      }
+      status={allReady ? "ready" : anyFailed && done ? "failed" : "active"}
       meta={META.video}
+      badge={
+        allReady
+          ? <StatusPill tone="green">ready</StatusPill>
+          : done
+            ? <StatusPill tone="neutral">{clipsReady}/{total} clips</StatusPill>
+            : <StatusPill tone="active" dot>{clipsReady}/{total} clips</StatusPill>
+      }
     >
-      <div className="space-y-2 h-full overflow-y-auto pr-1 max-h-[460px]">
-        {/* Per-scene clip + narration row */}
-        <ol className="grid grid-cols-3 gap-1.5">
-          {spec.scenes.map((scene, i) => {
-            const slot = slots[i] ?? {};
-            // The video clip has settled (fell back to the keyframe still) when
-            // the run is done OR this scene's video step failed live.
-            const videoSettled = done || !!slot.videoFailed;
-            const narrationSettled = done || !!slot.narrationFailed;
-            return (
-              <li key={i} className="rounded-md border bg-muted/30 p-1.5 space-y-1">
-                <div className="aspect-video overflow-hidden rounded bg-muted">
-                  {slot.clipUrl ? (
-                    <SceneClip src={slot.clipUrl} />
-                  ) : slot.keyframeUrl ? (
-                    <div className="relative h-full w-full">
-                      {/* While Decart renders, the keyframe is ghosted under a
-                          loader. Once the clip has settled with no video, the
-                          step fell back to this keyframe still — show it at full
-                          opacity as the scene's final visual (no loader). */}
-                      <KeyframeStill src={slot.keyframeUrl} ghosted={!videoSettled} />
-                      {!videoSettled && (
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <GeneratingLoader size="sm" variant="flames" />
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex h-full items-center justify-center">
-                      <GeneratingLoader size="sm" variant="flames" />
-                    </div>
-                  )}
-                </div>
-                {slot.narrationUrl ? (
-                  <PlayableAudio src={slot.narrationUrl} className="w-full h-6" />
-                ) : narrationSettled ? (
-                  // Best-effort narration fell back — state it, don't spin.
-                  <div className="flex items-center h-6">
-                    <span className="text-[9px] italic text-muted-foreground/60">narration unavailable</span>
+      <ol className="grid grid-cols-3 gap-1.5">
+        {spec.scenes.map((scene, i) => {
+          const slot = slots[i] ?? {};
+          const settled = done || !!slot.videoFailed;
+          return (
+            <li key={i} className="rounded-md border bg-muted/20 p-1 space-y-0.5">
+              <div className="aspect-video overflow-hidden rounded bg-muted">
+                {slot.clipUrl ? (
+                  <SceneClip src={slot.clipUrl} />
+                ) : slot.keyframeUrl ? (
+                  <div className="relative h-full w-full">
+                    <KeyframeStill src={slot.keyframeUrl} ghosted={!settled} />
+                    {!settled && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <GeneratingLoader size="sm" variant="flames" />
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1.5 h-6">
-                    <GeneratingLoader size="sm" variant="stars" />
-                    <span className="text-[9px] italic text-muted-foreground/80">TTS pending</span>
+                  <div className="flex h-full items-center justify-center">
+                    <GeneratingLoader size="sm" variant="flames" />
                   </div>
                 )}
-                <p className="text-[9px] text-muted-foreground line-clamp-1">{scene.caption}</p>
-              </li>
-            );
-          })}
-        </ol>
+              </div>
+              <p className="text-[9px] text-muted-foreground line-clamp-1">{scene.caption}</p>
+            </li>
+          );
+        })}
+      </ol>
+    </TileShell>
+  );
+}
 
-        {/* Per-step metadata — three slugs side by side. */}
-        <div className="grid grid-cols-3 gap-1.5 text-[9px] text-muted-foreground">
-          <div className="font-mono truncate" title={META.video.model}>video · {META.video.model}</div>
-          <div className="font-mono truncate" title={META.tts.model}>TTS · {META.tts.model}</div>
-          <div className="font-mono truncate" title={META.music.model}>score · {META.music.model}</div>
-        </div>
+function TtsStackCard({
+  spec, slots, done,
+}: { spec: StoryboardSpec; slots: SceneSlots[]; done: boolean }) {
+  const ready = slots.filter((s) => s.narrationUrl).length;
+  const total = spec.scenes.length;
+  const allReady = ready === total;
+  return (
+    <TileShell
+      as="div"
+      fullWidth
+      title="TTS narration"
+      icon={MusicIcon}
+      status={allReady ? "ready" : "active"}
+      meta={META.tts}
+      badge={
+        allReady
+          ? <StatusPill tone="green">ready</StatusPill>
+          : done
+            ? <StatusPill tone="neutral">{ready}/{total} narrations</StatusPill>
+            : <StatusPill tone="active" dot>{ready}/{total} narrations</StatusPill>
+      }
+    >
+      <ol className="grid grid-cols-3 gap-1.5">
+        {spec.scenes.map((scene, i) => {
+          const slot = slots[i] ?? {};
+          const settled = done || !!slot.narrationFailed;
+          return (
+            <li key={i} className="rounded-md border bg-muted/20 p-1 space-y-1">
+              <p className="text-[9px] font-mono text-muted-foreground tabular-nums">
+                {String(i + 1).padStart(2, "0")} · {scene.duration_sec}s
+              </p>
+              {slot.narrationUrl ? (
+                <PlayableAudio src={slot.narrationUrl} className="w-full h-6 animate-pop-in" />
+              ) : settled ? (
+                <div className="h-6 flex items-center">
+                  <span className="text-[9px] italic text-muted-foreground/60">
+                    narration unavailable
+                  </span>
+                </div>
+              ) : (
+                <div className="h-6 flex items-center justify-center rounded bg-muted/50">
+                  <GeneratingLoader size="sm" variant="stars" />
+                </div>
+              )}
+              <p className="text-[9px] text-muted-foreground line-clamp-2 leading-snug">
+                {scene.narration}
+              </p>
+            </li>
+          );
+        })}
+      </ol>
+    </TileShell>
+  );
+}
 
-        {/* Music track */}
-        <div className="rounded-md border bg-muted/30 p-2 space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
-              <MusicIcon className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-xs font-medium">Score</span>
-            </div>
-            {musicUrl ? (
-              <StatusPill tone="green">ready</StatusPill>
-            ) : done || musicFailed ? (
-              <StatusPill tone="neutral">unavailable</StatusPill>
-            ) : (
-              <StatusPill tone="active" dot>composing</StatusPill>
-            )}
-          </div>
-          <p className="text-[10px] text-muted-foreground line-clamp-1">{spec.music_prompt}</p>
-          {musicUrl ? (
-            <PlayableAudio src={musicUrl} className="w-full h-6 animate-pop-in" />
-          ) : done || musicFailed ? (
-            // Best-effort score fell back — final MP4 is silent on music.
-            <div className="flex items-center justify-center h-8 rounded bg-muted/50">
-              <span className="text-[10px] italic text-muted-foreground/60">score unavailable</span>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-8 rounded bg-muted/50">
-              <GeneratingLoader size="sm" variant="stars" />
-            </div>
-          )}
+function MusicStackCard({
+  spec, musicUrl, musicFailed, done,
+}: {
+  spec: StoryboardSpec;
+  musicUrl: string | null;
+  musicFailed: boolean;
+  done: boolean;
+}) {
+  const settled = done || musicFailed;
+  return (
+    <TileShell
+      as="div"
+      fullWidth
+      title="Score"
+      icon={MusicIcon}
+      status={musicUrl ? "ready" : settled ? "failed" : "active"}
+      meta={META.music}
+      badge={
+        musicUrl
+          ? <StatusPill tone="green">ready</StatusPill>
+          : settled
+            ? <StatusPill tone="neutral">unavailable</StatusPill>
+            : <StatusPill tone="active" dot>composing</StatusPill>
+      }
+    >
+      <p className="text-[10px] text-muted-foreground line-clamp-1 mb-1.5">
+        {spec.music_prompt}
+      </p>
+      {musicUrl ? (
+        <PlayableAudio src={musicUrl} className="w-full h-7 animate-pop-in" />
+      ) : settled ? (
+        <div className="flex items-center justify-center h-9 rounded bg-muted/40">
+          <span className="text-[10px] italic text-muted-foreground/60">
+            score unavailable
+          </span>
         </div>
-      </div>
+      ) : (
+        <div className="flex items-center justify-center h-9 rounded bg-muted/40">
+          <GeneratingLoader size="sm" variant="stars" />
+        </div>
+      )}
     </TileShell>
   );
 }
 
 // ---------- 5. Composition (Final MP4) -------------------------------------
 
-function CompositionTile({ asset, runId }: { asset: Asset; runId: string | null }) {
+function CompositionTile({
+  asset, runId, manifestUri,
+}: {
+  asset: Asset;
+  runId: string | null;
+  manifestUri: string | null;
+}) {
   // One-shot guard: if the composed MP4 won't load (e.g. a stale URL), show a
   // placeholder pointing at /files rather than a black broken-video box.
   const { errored, onError } = useLoadError();
+  const videoSrc = playbackUrl(asset.url);
   return (
     <TileShell
       title="Composition"
@@ -875,13 +1056,24 @@ function CompositionTile({ asset, runId }: { asset: Asset; runId: string | null 
             </span>
           </div>
         ) : (
+          // Route the durable B2 URL through `/assets/{key}` like every other
+          // media element — a bare durable URL 403s on a private bucket.
           <video
-            src={asset.url}
+            src={videoSrc}
             onError={onError}
             controls
             className="aspect-video w-full rounded-md border bg-black animate-pop-in"
           />
         )}
+
+        {/* Action row — Fullscreen + Manifest dialogs. Both open shadcn
+            Dialogs that overlay the page so the rest of the canvas + state
+            stays available behind them. */}
+        <div className="flex items-center gap-1.5 pt-1">
+          <FullscreenVideoDialog src={videoSrc} />
+          <ManifestDialog manifestUri={manifestUri} runId={runId} />
+        </div>
+
         <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
           <span className="font-mono truncate" title={runId ?? ""}>
             run · {runId?.slice(0, 8) ?? "—"}
@@ -893,5 +1085,156 @@ function CompositionTile({ asset, runId }: { asset: Asset; runId: string | null 
   );
 }
 
-// Suppress unused-icon lint — kept around for future tile additions.
-export const _icons = { ImageIcon };
+function FullscreenVideoDialog({ src }: { src: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" className="h-7 px-2 gap-1 text-[11px]">
+          <Maximize2 className="h-3 w-3" />
+          Fullscreen
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        // 95vw cap keeps a thin gutter on ultra-wide displays so the
+        // backdrop click-area remains discoverable.
+        className="!max-w-[95vw] !w-[95vw] p-0 overflow-hidden bg-black border-border"
+        showCloseButton
+      >
+        <DialogTitle className="sr-only">Final explainer — fullscreen playback</DialogTitle>
+        <DialogDescription className="sr-only">
+          Maximised view of the composed MP4. Press Escape to close.
+        </DialogDescription>
+        <video
+          src={src}
+          controls
+          autoPlay
+          className="w-full max-h-[88vh] object-contain bg-black"
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ManifestDialog({
+  manifestUri, runId,
+}: { manifestUri: string | null; runId: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [json, setJson] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Fetch lazily on first open — manifest JSON is small but we don't need
+  // to hit B2 until the user actually wants it. The whole side-effect is
+  // gated inside an async IIFE so we don't trigger React's
+  // set-state-in-effect lint (synchronous setState during render).
+  useEffect(() => {
+    if (!open || json !== null || error !== null) return;
+    let cancelled = false;
+    (async () => {
+      if (!manifestUri) {
+        if (!cancelled) setError("Manifest URI was not provided by the backend for this run.");
+        return;
+      }
+      setLoading(true);
+      try {
+        // `inline=1`: proxy the JSON through the API (same-origin) instead of
+        // 302-ing into B2's presigned URL, which fetch() can't read (no CORS).
+        const r = await fetch(`${playbackUrl(manifestUri)}?inline=1`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const text = await r.text();
+        if (cancelled) return;
+        // Pretty-print if it parses, otherwise show raw.
+        try { setJson(JSON.stringify(JSON.parse(text), null, 2)); }
+        catch { setJson(text); }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, manifestUri, json, error]);
+
+  const onCopy = () => {
+    if (!json) return;
+    navigator.clipboard?.writeText(json);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 gap-1 text-[11px]"
+          disabled={!manifestUri}
+          title={manifestUri ? "View Stage B2 Manifest JSON" : "No manifest available"}
+        >
+          <FileJson className="h-3 w-3" />
+          Manifest
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="!max-w-3xl p-0 overflow-hidden" showCloseButton>
+        <DialogHeader className="border-b border-border px-5 py-3.5">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <FileJson className="h-4 w-4 text-muted-foreground" />
+            Run manifest
+            {runId && (
+              <span className="status-pill font-mono text-[10px]">
+                {runId.slice(0, 8)}
+              </span>
+            )}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            Genblaze writes one Manifest per pipeline run. The JSON below
+            captures the pipeline name, the parent_run_id (B0 → B1 → B2
+            lineage), every step&apos;s model + provider + asset URL, and the
+            canonical hash used for verification.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+          {loading && (
+            <div className="flex h-32 items-center justify-center">
+              <GeneratingLoader size="md" variant="stars" label="Loading manifest" />
+            </div>
+          )}
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              Couldn&apos;t load the manifest: <span className="font-mono">{error}</span>
+            </div>
+          )}
+          {json && (
+            <>
+              <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground font-mono">
+                <span>{json.split("\n").length} lines · {json.length.toLocaleString()} chars</span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onCopy}
+                    className="px-1.5 py-0.5 rounded border border-border hover:bg-accent/40 transition-colors"
+                  >
+                    Copy
+                  </button>
+                  {manifestUri && (
+                    <a
+                      href={playbackUrl(manifestUri)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-1.5 py-0.5 rounded border border-border hover:bg-accent/40 transition-colors"
+                    >
+                      Raw ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+              <pre className="text-[11px] font-mono leading-snug whitespace-pre-wrap break-all rounded-md border border-border bg-muted/40 p-3 max-h-[55vh] overflow-y-auto">
+                {json}
+              </pre>
+            </>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -11,7 +11,7 @@ const MODELS: Record<string, ModelInfo> = {
   "gpt-image-1":   { label: "gpt-image-1",   provider: "OpenAI" },
   "gpt-image-2":   { label: "gpt-image-2",   provider: "OpenAI" },
   // Decart
-  "lucy-pro":      { label: "Lucy Pro",      provider: "Decart" },
+  "Kling-Image2Video-V2.1-Master": { label: "Kling i2v V2.1", provider: "GMICloud" },
   // NVIDIA
   "nvidia/magpie-tts-multilingual": { label: "Magpie TTS", provider: "NVIDIA" },
   // GMICloud

@@ -96,14 +96,27 @@ def classify(exc: Exception) -> ClassifiedError:
             status=status,
         )
 
-    # Fallback — ffmpeg missing (composer `RuntimeError`). Not retryable by a
-    # re-run; the source assets are already durable in B2.
-    if "ffmpeg" in str(exc).lower() and "not found" in str(exc).lower():
+    # Composition failures — the composer raises `RuntimeError` for
+    # deterministic, non-transient problems: a missing ffmpeg binary, an ffmpeg
+    # encode/mux error, or a scene with neither a clip nor a keyframe. A plain
+    # re-run re-bills every provider and hits the same wall, so these are NOT
+    # retryable (the UI offers Edit/Start-over, not Retry). Keyed on the
+    # exception *type*, not message text, so it survives message rewording.
+    if isinstance(exc, RuntimeError):
+        msg = str(exc).lower()
+        if "ffmpeg" in msg and "not found" in msg:
+            return ClassifiedError(
+                code="ffmpeg_missing",
+                retryable=False,
+                message="ffmpeg is not installed on the API host.",
+                hint="Install ffmpeg (see infra/README.md). Your generated assets are saved in B2.",
+                status=500,
+            )
         return ClassifiedError(
-            code="ffmpeg_missing",
+            code="composition",
             retryable=False,
-            message="ffmpeg is not installed on the API host.",
-            hint="Install ffmpeg (see infra/README.md). Your generated assets are saved in B2.",
+            message="Composing the final video failed.",
+            hint="This usually isn't fixed by retrying. Check the API logs; any assets generated so far are saved in B2.",
             status=500,
         )
 

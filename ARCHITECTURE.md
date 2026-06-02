@@ -6,10 +6,11 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │ apps/web — Next.js App Router (React 19)                             │
 │                                                                      │
-│  page.tsx ──► PromptForm + StoryboardReview + SceneStrip             │
-│             + PipelineProgress + FinalVideo + AssetList              │
+│  studio-page.tsx ──► PipelineCanvas (Seed→Script→Storyboard→Media→   │
+│             Composition tiles) + InspectorDrawer + RunErrorPanel +   │
+│             ReadinessNotice; HealthBanner in the layout              │
 │  lib/sse-client.ts ──► raw-fetch SSE parser (POST + stream)          │
-│  lib/api.ts ──► typed helpers; everything routes through /api/proxy  │
+│  lib/api-client.ts ──► typed helpers + ApiError; routes via API_BASE │
 └────────────────────────────────┬─────────────────────────────────────┘
                                  │ /api/proxy/<path>
                                  ▼
@@ -72,8 +73,13 @@ Stage A Pipeline.
 
 - **Pipeline:** `Pipeline("genblaze-gen-media-multi-provider-sample", max_concurrency=3)`.
   Stands alone — no `from_result()` anchor, because Stage A is not a Pipeline.
-- **Provider:** `DalleProvider` (`gpt-image-1` default; `gpt-image-2`
-  is the documented upgrade target).
+- **Provider:** `ImagenProvider` (Google) — `imagen-4.0-generate-001`
+  default (the Gemini API serves Imagen 4.0; 3.0 is retired);
+  `imagen-4.0-generate-001` / `-ultra-` are the higher-quality upgrade targets.
+  Stage B0 generates one reference image first; B1 fans out one keyframe per
+  scene, prefixing the shared `style_prompt` so the scenes rhyme visually
+  (Imagen is generate-only, so consistency comes from the prompt, not image
+  conditioning).
 - **Output:** one PNG per scene. The Stage B1 Manifest is the lineage
   root for the visual track in B2.
 
@@ -121,6 +127,25 @@ Stage A Pipeline.
   through `Pipeline.astream()` (native async), so the event loop is never
   blocked on provider HTTP between events either. No `ffmpeg-python`
   dependency.
+
+### Why some endpoints are sync `def`
+
+Endpoints that make a **blocking B2 call** — `/health` (`probe_storage`),
+`/files`, `/runs/{id}/assets`, `/assets/{key}` — and `/runs/storyboard`
+(blocking OpenAI + B2) are plain `def`, so Starlette runs them in its
+threadpool. A blocking call inside an `async def` runs on the event loop, and
+one stall there freezes the **entire** API (every endpoint, incl. built-in
+`/docs`). Only `/runs/media/stream`'s generator is `async` — it `await`s and
+offloads ffmpeg via `asyncio.to_thread`. The structural test
+`test_blocking_b2_endpoints_are_sync_def` guards this invariant.
+
+`/assets/{key}` 302-redirects to a presigned B2 URL by default; media tiles
+load these via `<img>`/`<video>` `src` (not CORS-gated). The manifest viewer
+uses `fetch()`, which follows the 302 into B2's cross-origin presigned URL and
+is then blocked (B2 sets no `Access-Control-Allow-Origin`), so it requests
+`?inline=1` — the endpoint proxies the JSON bytes through FastAPI (same-origin,
+CORS-allowed). Reserve `inline=1` for small artifacts; large media stay on the
+redirect path.
 
 ## Ethos constraints
 
@@ -189,8 +214,9 @@ single `data: <json>\n\n` line. The JSON payload is one of:
 ```
 
 The frontend's `streamSse()` helper (in `lib/sse-client.ts`) parses
-these into a typed `SseFrame` union; the page accumulates them into the
-`PipelineProgress` log and into per-scene slots for `SceneStrip`.
+these into a typed `SseFrame` union; `studio-page.tsx` accumulates them into
+the `InspectorDrawer` log and into the per-scene `SceneSlots` the
+`PipelineCanvas` tiles render.
 
 ## Why `composer.py` lives in `repo/`
 

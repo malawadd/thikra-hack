@@ -55,15 +55,44 @@ def test_pipelines_is_the_only_genblaze_provider_consumer() -> None:
     assert not offenders, f"Provider imports outside pipelines.py: {offenders}"
 
 
-def test_pipelines_line_budget() -> None:
-    """`repo/pipelines.py` must stay below 320 lines.
+def test_blocking_b2_endpoints_are_sync_def() -> None:
+    """Endpoints that make blocking B2 calls must be sync `def`, never `async def`.
 
-    Bumped 280 → 320 for verbose per-step prompt logging — every step
-    queued onto the pipeline now logs its prompt + model + caption so
-    debugging which scene blew up doesn't require devtools network tab.
+    Starlette runs sync handlers in a threadpool; a blocking B2 call inside an
+    `async def` handler runs ON the event loop and a single stall freezes the
+    whole API (this regression once wedged every endpoint, incl. built-in
+    `/docs`). This guards against silently re-adding `async` to them. The SSE
+    streamer stays `async def` deliberately — it `await`s and offloads ffmpeg
+    via `asyncio.to_thread`, so it is intentionally excluded here.
+    """
+    must_be_sync = {
+        "health", "list_run_assets", "list_files", "get_asset",
+        "create_storyboard",  # blocking OpenAI chat + B2 put, up front
+    }
+    tree = ast.parse((APP_ROOT / "main.py").read_text())
+    offenders = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in must_be_sync
+    ]
+    assert not offenders, (
+        f"these blocking-B2 handlers must be sync `def` (Rule: I/O off the "
+        f"event loop), found `async def`: {offenders}"
+    )
+
+
+def test_pipelines_line_budget() -> None:
+    """`repo/pipelines.py` must stay below 460 lines.
+
+    Bumped 320 → 400 for the Google Imagen swap (Stage B0/B1) + the
+    Decart↔GMICloud video-provider fallback resolver that auto-swaps
+    when a key is missing. Bumped 400 → 460 for two provider-contract
+    fixes: `snap_scene_durations` (Kling i2v renders 5s/10s clips only)
+    and `_instrumental_music_registry` (MiniMax-Music needs a `lyrics`/
+    `is_instrumental` payload the default family allowlist drops).
     """
     lines = (APP_ROOT / "repo" / "pipelines.py").read_text().splitlines()
-    assert len(lines) < 320, f"pipelines.py is {len(lines)} lines — budget is 320"
+    assert len(lines) < 460, f"pipelines.py is {len(lines)} lines — budget is 460"
 
 
 def test_composer_line_budget() -> None:
@@ -97,4 +126,9 @@ def test_main_line_budget() -> None:
     lives in `app/errors.py`), and `/health` reports `ffmpeg_present`.
     """
     lines = (APP_ROOT / "main.py").read_text().splitlines()
-    assert len(lines) < 460, f"main.py is {len(lines)} lines — budget is 460"
+    # Bumped 460 → 480 for `manifest_uri` propagation in the
+    # `compose.complete` SSE frame (Composition tile's Manifest dialog).
+    # Bumped 480 → 500 for the `inline=1` manifest-proxy branch on
+    # `/assets/{key}` (fetch() can't read B2's cross-origin presigned URL)
+    # and the duration-snap call in the media stream handler.
+    assert len(lines) < 500, f"main.py is {len(lines)} lines — budget is 500"

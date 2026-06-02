@@ -8,7 +8,7 @@ all 404 on PyPI as of 2026-05-28. The composer falls back to the system
 
 ## Module
 
-`services/api/app/repo/composer.py` — < 450 lines.
+`services/api/app/repo/composer.py` — < 520 lines.
 
 It lives under `repo/` because it's storage-adjacent: it downloads
 source assets from B2 via the same `S3StorageBackend` instance the
@@ -44,16 +44,20 @@ this.
 
    ```
    ffmpeg ... -filter_complex
-       "[0:a]adelay=0|0,apad[v0];
-        [1:a]adelay=8000|8000,apad[v1];
+       "[0:a]adelay=0|0[v0];
+        [1:a]adelay=8000|8000[v1];
         ...;
         [N:a]volume=-18dB[mus];
-        [v0][v1]...[mus]amix=inputs=N+1:duration=longest[aout]"
+        [v0][v1]...[mus]amix=inputs=N+1:duration=longest:dropout_transition=0[aout]"
        -map [aout] -c:a aac -b:a 192k audio.m4a
    ```
 
    `adelay` shifts each narration to its scene start; `volume=-18dB`
    ducks the music bed underneath; `amix` combines everything.
+   `dropout_transition=0` stops the surviving tracks from being re-leveled
+   when a shorter one (a narration) ends. Note **no `apad`**: padding to an
+   unbounded length would make `amix=longest` never terminate — the delayed
+   narrations stay finite and `longest` bounds the mix.
 
    **Audio is best-effort.** The graph is built only from tracks that
    exist: ffmpeg input indices track *added* inputs (not scene index), so a
@@ -94,8 +98,11 @@ this.
    (the plan flagged this as uncertain; confirmed at build time).
 
 5. **Upload to B2** at `explainers/<run-id>/final.mp4` via
-   `backend().put(...)`, then synthesize an `Asset` with a presigned URL
-   for the response. No `boto3` import; storage stays delegated.
+   `backend().put(...)`, then synthesize an `Asset` whose `url` is the
+   **durable** B2 URL (`backend().get_durable_url(key)`) — never a presigned
+   one (a 1h TTL would silently 403 saved links). The frontend routes it
+   through `GET /assets/{key}` for a fresh presigned redirect at playback.
+   No `boto3` import; storage stays delegated.
 
 ## Why subprocess, not `ffmpeg-python`
 
@@ -109,7 +116,7 @@ this.
 
 `subprocess.run` is blocking. The streaming endpoint's SSE generator is
 `async def`, and it dispatches the composer with
-`await asyncio.to_thread(compose_final, b2_result, spec)` so a long
+`await asyncio.to_thread(compose_final, b2_result, b1_result, spec)` so a long
 ffmpeg invocation never starves the FastAPI event loop or wedges the
 SSE stream that's emitting `stage.start` / `compose.complete` frames.
 

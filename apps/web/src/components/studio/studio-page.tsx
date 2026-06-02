@@ -36,6 +36,9 @@ export function StudioPage() {
   const [musicFailed, setMusicFailed] = useState(false);
   const [finalAsset, setFinalAsset] = useState<Asset | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
+  // Durable B2 URL of the Stage B2 Manifest — populated alongside the
+  // final MP4 so the Composition tile can open it for inspection.
+  const [manifestUri, setManifestUri] = useState<string | null>(null);
   // The current run's fatal error (null when healthy). Drives RunErrorPanel.
   // Kept separate from `phase` so partial progress stays rendered behind it.
   const [runError, setRunError] = useState<RunError | null>(null);
@@ -117,6 +120,7 @@ export function StudioPage() {
     setMusicFailed(false);
     setFinalAsset(null);
     setRunId(null);
+    setManifestUri(null);
     setRunError(null);
   };
 
@@ -130,6 +134,7 @@ export function StudioPage() {
     setMusicFailed(false);
     setFinalAsset(null);
     setRunId(null);
+    setManifestUri(null);
     setRunError(null);
     pushFrame({ kind: "stage.start", stage: "A.storyboard" });
     pushFrame({
@@ -179,6 +184,7 @@ export function StudioPage() {
         if (frame.kind === "compose.complete") {
           setFinalAsset(frame.asset);
           setRunId(frame.run_id);
+          setManifestUri(frame.manifest_uri ?? null);
           setPhase("done");
           toast.success("Final MP4 written to B2");
         }
@@ -231,7 +237,10 @@ export function StudioPage() {
   return (
     // pb-[60px] reserves space for the collapsed inspector drawer at
     // the bottom of the viewport so content is never under it.
-    <div className="space-y-8 pb-[60px]">
+    // `min-w-0` keeps the studio-page column from inheriting the
+    // canvas's intrinsic min-w-max width — that prevents the page
+    // header from horizontally scrolling along with the canvas tiles.
+    <div className="space-y-8 pb-[60px] min-w-0">
       <div className="animate-fade-in border-b border-border pb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="page-title">Genblaze Media Studio</h1>
@@ -281,6 +290,7 @@ export function StudioPage() {
         musicFailed={musicFailed}
         finalAsset={finalAsset}
         runId={runId}
+        manifestUri={manifestUri}
         generating={generating}
         onSubmit={handleSubmit}
         onRestart={resetAll}

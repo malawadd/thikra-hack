@@ -17,6 +17,7 @@ frozenlist==1.8.0
 genblaze-core==0.3.2
 genblaze-decart==0.3.0
 genblaze-gmicloud==0.3.1
+genblaze-google==0.3.0
 genblaze-nvidia==0.3.0
 genblaze-openai==0.3.0
 genblaze-s3==0.3.2

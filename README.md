@@ -1,27 +1,38 @@
 # genblaze-gen-media-multi-provider-sample
 
-> One prompt → narrated, scored, captioned MP4. OpenAI + NVIDIA + Decart +
-> GMICloud, orchestrated by [Genblaze][genblaze]. Backblaze B2 is the
+> One prompt → narrated, scored, captioned MP4. OpenAI + Google + NVIDIA +
+> Decart + GMICloud, orchestrated by [Genblaze][genblaze]. Backblaze B2 is the
 > sole asset store; the sample contains zero direct `boto3` calls.
 
-The sample shows what Genblaze enables functionally: a developer types one
-sentence ("a kid's introduction to how solar panels work") and the library
-coordinates a six-step media workflow end-to-end across four providers. No
-bespoke retry logic, no per-provider auth/poll glue, no `boto3` import —
-every Pipeline step is one `.step()` call, and every asset lands in B2
-via `genblaze-s3`.
+**Building a multi-provider generative-media pipeline used to mean writing
+your own glue between five different AI providers — auth, retries, polling,
+error handling, asset storage, and lineage tracking, all hand-rolled per
+vendor.** This sample shows how [Genblaze][genblaze] collapses that work into
+a one-line `.step()` call: a developer types a single sentence and the
+library orchestrates an entire AI explainer-video workflow end-to-end —
+**text-to-storyboard planning** (OpenAI `gpt-4.1-nano`),
+**keyframe image generation** (Google Imagen 4), **image-to-video animation**
+(Decart Lucy / GMICloud Kling), **text-to-speech narration** (NVIDIA Magpie
+TTS), and **AI music scoring** (GMICloud MiniMax) — and stitches them into a
+final captioned MP4 with ffmpeg composition. Every intermediate artifact and
+the composed video land in Backblaze B2 via `genblaze-s3`; the sample source
+contains zero direct `boto3` calls. It's a reference for what production
+multi-provider generative-AI pipelines look like when the orchestration layer
+does its job — no per-provider auth boilerplate, no retry loops, no polling
+glue, no bespoke storage scaffolding.
 
-## Why this sample exists
+![Genblaze multi-provider generative-media sample app — text-to-video AI pipeline orchestrating OpenAI, Google Imagen, Decart, NVIDIA, and GMICloud with Backblaze B2 storage](./Genblaze-sample-app.jpg)
 
-Phase-1 acceptance for new generative-media providers in the Genblaze
-ecosystem is "a multi-provider sample app works against the published
-wheel." This sample wires:
+## Pipeline stages
+
+The sample wires five generative-AI providers behind one Genblaze pipeline,
+with Backblaze B2 as the durable asset store:
 
 | Stage     | Genblaze surface                | Model default                      | Output                |
 |-----------|---------------------------------|------------------------------------|-----------------------|
 | A — plan  | `genblaze_openai.chat()` (function) | `gpt-4.1-nano`                | `StoryboardSpec` JSON |
-| B1 — image | `DalleProvider` (`.step()`)     | `gpt-image-1`                      | one PNG per scene     |
-| B2 — video | `DecartVideoProvider` (`.step()`) | `lucy-pro`                        | one MP4 per scene     |
+| B0/B1 — image | `ImagenProvider` (`.step()`) | `imagen-4.0-generate-001`     | reference + 1 PNG/scene |
+| B2 — video | `GMICloudVideoProvider` (`.step()`) | `Kling-Image2Video-V2.1-Master` | one MP4 per scene     |
 | B2 — TTS  | `NvidiaAudioProvider` (`.step()`) | `nvidia/magpie-tts-multilingual`  | one WAV per scene     |
 | B2 — music | `GMICloudAudioProvider` (`.step()`) | `minimax-music-2.5`             | one WAV for the run   |
 | C — compose | (ffmpeg fallback)             | —                                  | final MP4 → B2        |
@@ -44,8 +55,10 @@ Stages B1 and B2 are linked Pipelines sharing one slug
 - **Backblaze B2** — create a bucket + Application Key
   ([signup](https://www.backblaze.com/sign-up/cloud-storage)). Region
   format: `us-west-004` / `eu-central-003` / etc.
-- **OpenAI** — API key for `chat()` (Stage A) + `DalleProvider` (Stage B1)
+- **OpenAI** — API key for `chat()` storyboard planning (Stage A)
   ([platform.openai.com](https://platform.openai.com/)).
+- **Google** — API key for `ImagenProvider` reference + keyframe images
+  (Stages B0/B1) ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
 - **NVIDIA NIM** — API key for TTS ([build.nvidia.com](https://build.nvidia.com/)).
 - **Decart** — API key for video ([decart.ai](https://decart.ai/)).
 - **GMICloud** — API key for music ([gmicloud.ai](https://www.gmicloud.ai/)).
@@ -102,7 +115,7 @@ apps/web (Next.js, App Router, React 19)
     ▼
 services/api (FastAPI)
     │
-    │  app/main.py    ──► app/repo/pipelines.py  ──►  genblaze-{core,s3,openai,nvidia,decart,gmicloud}
+    │  app/main.py    ──► app/repo/pipelines.py  ──►  genblaze-{core,s3,openai,google,nvidia,decart,gmicloud}
     │                     app/repo/composer.py   ──►  system ffmpeg (only non-Genblaze adapter)
     │
     ▼

@@ -98,8 +98,17 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     // FastAPI puts our payload under `detail`. It's either a classified object
-    // {code,message,hint,retryable} or a plain string.
+    // {code,message,hint,retryable}, a 422 validation array of {loc,msg,type},
+    // or a plain string.
     const detail = body?.detail;
+    // Surface the first 422 validation error with its field — e.g. "prompt:
+    // String should have at most 2000 characters" — not a bare "API error: 422".
+    if (Array.isArray(detail)) {
+      const first = detail[0];
+      const field = Array.isArray(first?.loc) ? first.loc[first.loc.length - 1] : undefined;
+      const msg = first?.msg ? `${field ? `${field}: ` : ""}${first.msg}` : `API error: ${res.status}`;
+      throw new ApiError(msg, res.status);
+    }
     if (detail && typeof detail === "object") {
       throw new ApiError(detail.message || `API error: ${res.status}`, res.status, detail);
     }

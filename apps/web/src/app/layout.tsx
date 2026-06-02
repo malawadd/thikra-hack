@@ -41,10 +41,21 @@ export default function RootLayout({
               <SidebarProvider>
                 <TooltipProvider>
                   <AppSidebar />
-                  <div className="flex flex-1 flex-col">
+                  {/* `min-w-0` is load-bearing here. Without it, a flex
+                      item defaults to `min-width: auto` (= min-content
+                      width), so any wide descendant (the pipeline
+                      canvas's intrinsic min-w-max row of tiles) pushes
+                      THIS column wider than the viewport. The whole
+                      page then horizontally scrolls — including the
+                      Studio header — instead of only the canvas scrolling.
+                      `overflow-x-hidden` on main is the belt-and-
+                      suspenders: even if a descendant manages to claim
+                      horizontal space, it stays clipped here so the
+                      page header / sidebar stay anchored. */}
+                  <div className="flex flex-1 flex-col min-w-0">
                     <Header />
                     <HealthBanner />
-                    <main className="flex-1 overflow-auto p-6 lg:p-8">
+                    <main className="flex-1 overflow-y-auto overflow-x-hidden p-6 lg:p-8">
                       {children}
                     </main>
                   </div>

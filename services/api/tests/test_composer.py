@@ -233,6 +233,9 @@ def test_compose_final_partial_narration_indexes_added_inputs() -> None:
     assert "[1:a]adelay=16000" in mix      # scene 2 at offset 2x8000ms
     assert "[2:a]volume=-18dB[mus]" in mix
     assert "amix=inputs=3" in mix
+    # Regression guard: `apad` (no length) pads to infinity and hangs
+    # `amix=longest` until the timeout — it must NOT appear in the graph.
+    assert "apad" not in mix
 
 
 def test_compose_final_no_audio_renders_silent_video() -> None:

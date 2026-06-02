@@ -13,6 +13,7 @@ import json
 import logging
 import shutil
 import time
+from functools import lru_cache
 from typing import Any
 
 from dotenv import load_dotenv
@@ -21,7 +22,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import RedirectResponse, StreamingResponse  # noqa: E402
+from fastapi.responses import RedirectResponse, Response, StreamingResponse  # noqa: E402
 from genblaze_core.observability.events import (  # noqa: E402
     PipelineCompletedEvent,
     PipelineFailedEvent,
@@ -40,6 +41,7 @@ from app.repo import (  # noqa: E402
     presign_asset_url,
     probe_storage,
     sink,
+    snap_scene_durations,
 )
 from app.repo.composer import compose_final  # noqa: E402
 from app.types.api import MediaRequest, PromptRequest  # noqa: E402
@@ -112,12 +114,15 @@ async def _log_startup() -> None:
         "b2_bucket": settings.b2_bucket_name,
         "chat_model": settings.chat_model,
         "image_model": settings.image_model,
+        "video_provider": settings.video_provider,
         "video_model": settings.video_model,
+        "gmi_video_model": settings.gmi_video_model,
         "tts_model": settings.tts_model,
         "music_model": settings.music_model,
         "cors_origins": settings.cors_origins,
         "providers_configured": {
             "openai": bool(settings.openai_api_key),
+            "google": bool(settings.google_api_key),
             "nvidia": bool(settings.nvidia_api_key),
             "decart": bool(settings.decart_api_key),
             "gmi": bool(settings.gmi_api_key),
@@ -185,6 +190,10 @@ async def _stream_stage(
             "model": getattr(evt, "model", None),
         })
         yield _sse({"kind": "stream", "stage": stage, "event": evt.model_dump(mode="json")}), captured
+        # NB: this reads `evt.step` off the LIVE in-process event object —
+        # `step` is `exclude=True`, so it's dropped by the `model_dump` above
+        # and is `None` on any re-parsed/wire copy. The `evt.step.assets`
+        # truthiness guard also makes the `[0]` index safe on an assetless step.
         if isinstance(evt, StepCompletedEvent) and evt.step and evt.step.assets:
             asset = evt.step.assets[0]
             stage_log.info("step completed", extra={
@@ -220,16 +229,30 @@ async def _stream_stage(
 
 # --- Endpoints -------------------------------------------------------------
 
+@lru_cache(maxsize=1)
+def _ffmpeg_present() -> bool:
+    """Whether `ffmpeg` is on PATH — a deploy-time invariant, probed once."""
+    return shutil.which("ffmpeg") is not None
+
+
 @app.get("/health")
-async def health():
+def health():
     """Liveness probe — B2 reachability + provider key presence + ffmpeg.
 
     `ffmpeg_present` lets the UI warn before a run that Stage C (compose) will
     fail — ffmpeg is only exercised at the very end, after minutes of paid
     B-stage generation. `status` stays tied to B2 (the `HealthBanner` contract).
+
+    Sync `def` (NOT `async`): `probe_storage()` makes a blocking B2 call, so
+    Starlette runs this in the threadpool. A stalled B2 probe must never block
+    the event loop — the frontend polls this on an interval, and a wedged loop
+    takes down every endpoint. (Same principle as AGENTS Rule 6's ffmpeg →
+    `asyncio.to_thread`: keep blocking I/O off the event loop.)
     """
     b2_ok = probe_storage()
-    ffmpeg_ok = shutil.which("ffmpeg") is not None
+    # ffmpeg presence is a deploy-time invariant — cache it so a per-tab 60s
+    # poll doesn't re-scan PATH. B2 reachability CAN flap, so it stays live.
+    ffmpeg_ok = _ffmpeg_present()
     logger.debug("health probe", extra={"b2_connected": b2_ok, "ffmpeg_present": ffmpeg_ok})
     return {
         "status": "healthy" if b2_ok else "degraded",
@@ -237,6 +260,7 @@ async def health():
         "ffmpeg_present": ffmpeg_ok,
         "providers": {
             "openai_key_present": bool(settings.openai_api_key),
+            "google_key_present": bool(settings.google_api_key),
             "nvidia_key_present": bool(settings.nvidia_api_key),
             "decart_key_present": bool(settings.decart_api_key),
             "gmi_key_present": bool(settings.gmi_api_key),
@@ -285,7 +309,9 @@ def stream_media(req: MediaRequest):
         "spec_provided": req.spec is not None,
         "scene_count": len(req.spec.scenes) if req.spec else None,
     })
-    spec = req.spec or generate_storyboard(req.prompt)[0]
+    # Snap scene durations to the video provider's grid (Kling renders 5s/10s
+    # only) so B2 and the composer share one source of truth for clip length.
+    spec = snap_scene_durations(req.spec or generate_storyboard(req.prompt)[0])
 
     async def gen():
         # Outer try/except converts ANY uncaught exception (provider failure,
@@ -359,11 +385,17 @@ def stream_media(req: MediaRequest):
             )
             for message in notices:
                 yield _sse({"kind": "notice", "stage": "B2.media", "message": message})
+            # `manifest_uri` is the durable B2 URL of the Stage B2 Manifest
+            # (provenance: pipeline name, parent_run_id, per-step assets,
+            # canonical_hash). We surface it to the client so the user can
+            # open and inspect the verification artifact alongside the MP4.
+            manifest_uri = getattr(b2_result.manifest, "manifest_uri", None)
             yield _sse({
                 "kind": "compose.complete",
                 "asset": final_asset.model_dump(mode="json"),
                 "spec": spec.model_dump(mode="json"),
                 "run_id": b2_result.run.run_id,
+                "manifest_uri": manifest_uri,
             })
         except Exception as exc:
             # logger.exception emits the full traceback to the [api] log so the
@@ -385,8 +417,11 @@ def stream_media(req: MediaRequest):
 
 
 @app.get("/runs/{run_id}/assets")
-async def list_run_assets(run_id: str):
-    """Enumerate B2 keys under `explainers/<run_id>/` — powers the per-run asset list."""
+def list_run_assets(run_id: str):
+    """Enumerate B2 keys under `explainers/<run_id>/` — powers the per-run asset list.
+
+    Sync `def`: `backend().list()` is a blocking B2 call — kept off the event
+    loop via the threadpool (see `health`)."""
     prefix = f"explainers/{run_id}/"
     try:
         page = backend().list(prefix, max_keys=200)
@@ -404,11 +439,14 @@ async def list_run_assets(run_id: str):
 
 
 @app.get("/files")
-async def list_files():
+def list_files():
     """Enumerate every B2 key under `explainers/` — powers the /files page.
 
     Cap at 500 entries; the sample's storage scales linearly with runs, but
     a full browser is out of scope (point users at the B2 console for that).
+
+    Sync `def`: `backend().list()` is a blocking B2 call — runs in the
+    threadpool, off the event loop (see `health`).
     """
     try:
         page = backend().list("explainers/", max_keys=500)
@@ -428,12 +466,24 @@ async def list_files():
 
 
 @app.get("/assets/{key:path}")
-async def get_asset(key: str):
-    """Redirect to a short-lived presigned URL for a given B2 object key."""
+def get_asset(key: str, inline: bool = False):
+    """Serve a B2 object: 302 to a presigned URL, or proxy the bytes inline.
+
+    Default (`inline=0`) redirects to a short-lived presigned URL — media tiles
+    load these via `<img>`/`<video>` src, which CORS doesn't gate. The manifest
+    viewer uses `fetch()` instead, which DOES follow the 302 into B2's
+    cross-origin presigned URL and is then blocked (B2 sets no
+    `Access-Control-Allow-Origin`). `inline=1` proxies the bytes through FastAPI
+    (same-origin, CORS-allowed) so `fetch()` can read small JSON artifacts.
+
+    Sync `def`: the B2 presign/get are blocking — kept off the event loop via
+    the threadpool (see `health`)."""
     try:
+        if inline:
+            return Response(content=backend().get(key), media_type="application/json")
         url = presign_asset_url(key)
     except Exception as exc:
-        logger.warning("presign 404", extra={"key": key, "exception": str(exc)})
+        logger.warning("asset 404", extra={"key": key, "exception": str(exc)})
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     logger.debug("asset redirect", extra={"key": key})
     return RedirectResponse(url=url, status_code=302)

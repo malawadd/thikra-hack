@@ -65,8 +65,21 @@ def test_ffmpeg_missing_fallback() -> None:
     assert "B2" in ce.hint  # tells the user their assets are safe
 
 
+def test_composition_runtime_error_is_not_retryable() -> None:
+    # Deterministic compose failures (ffmpeg encode/mux, no-clip-no-keyframe)
+    # must NOT offer a paid retry that will re-fail identically.
+    for exc in (
+        RuntimeError("ffmpeg finalize failed: Invalid argument"),
+        RuntimeError("scene 2: no video clip and no keyframe still — nothing to render"),
+    ):
+        ce = classify(exc)
+        assert ce.code == "composition"
+        assert ce.retryable is False
+        assert "scene 2" not in ce.message  # no leak of raw detail
+
+
 def test_unknown_default_is_retryable() -> None:
-    ce = classify(ValueError("something weird happened"))
+    ce = classify(ValueError("something weird happened"))  # not a RuntimeError
     assert ce.code == "unknown"
     assert ce.retryable is True
     assert "something weird happened" not in ce.message  # no leak

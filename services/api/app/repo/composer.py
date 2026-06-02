@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -155,37 +156,26 @@ def _download_music(b2_run, tmp: Path) -> Path | None:
     return _download(url, tmp / "music.wav") if url else None
 
 
-def degradation_notices(b2_run, spec: StoryboardSpec) -> list[str]:
+def degradation_notices(scenes: list[_SceneBundle], music_present: bool) -> list[str]:
     """Human-readable messages for every best-effort track that fell back.
 
-    Mirrors the presence checks `compose_final` uses (via `_asset_url_or_none`
-    / `_music_url`) so the UI can 'state' what degraded — video→keyframe
-    still, narration, music — without re-implementing the Stage B2 layout.
-    Called after `_group_scenes` succeeds, so any missing-video scene here is
-    one that fell back to its keyframe (a scene missing BOTH would have raised).
+    Derived from the already-grouped `_SceneBundle`s (video→still and narration
+    presence) plus the music flag — so the Stage B2 step layout is encoded in
+    exactly ONE place (`_group_scenes`), not re-walked here.
     """
-    steps = b2_run.run.steps
     notices: list[str] = []
-    still_scenes = [
-        i for i in range(len(spec.scenes))
-        if (2 * i) >= len(steps) or _asset_url_or_none(steps[2 * i]) is None
-    ]
-    if still_scenes:
-        scenes = ", ".join(str(i + 1) for i in still_scenes)
-        notices.append(
-            f"Video unavailable for scene(s) {scenes} — used the keyframe still instead."
-        )
-    missing = [
-        i for i in range(len(spec.scenes))
-        if (2 * i + 1) >= len(steps) or _asset_url_or_none(steps[2 * i + 1]) is None
-    ]
+    still = [s.index for s in scenes if s.video_path is None]
+    if still:
+        nums = ", ".join(str(i + 1) for i in still)
+        notices.append(f"Video unavailable for scene(s) {nums} — used the keyframe still instead.")
+    missing = [s.index for s in scenes if s.narration_path is None]
     if missing:
-        if len(missing) == len(spec.scenes):
+        if len(missing) == len(scenes):
             notices.append("Narration unavailable — final video has no voiceover.")
         else:
-            scenes = ", ".join(str(i + 1) for i in missing)
-            notices.append(f"Narration unavailable for scene(s) {scenes}.")
-    if _music_url(b2_run) is None:
+            nums = ", ".join(str(i + 1) for i in missing)
+            notices.append(f"Narration unavailable for scene(s) {nums}.")
+    if not music_present:
         notices.append("Background music unavailable — final video has no score.")
     return notices
 
@@ -194,7 +184,6 @@ def degradation_notices(b2_run, spec: StoryboardSpec) -> list[str]:
 
 def _run_ffmpeg(args: list[str], *, stage: str) -> None:
     """Single-entry ffmpeg invoker — logs the stage, fail-stops on nonzero."""
-    import time
     argv0 = " ".join(args[:8]) + (" ..." if len(args) > 8 else "")
     logger.info("ffmpeg start", extra={"stage": stage, "argv0": argv0})
     start = time.perf_counter()
@@ -251,9 +240,13 @@ def _concat_video(scenes: list[_SceneBundle], tmp: Path) -> Path:
         labels.append(f"[v{idx}]")
     filters.append(f"{''.join(labels)}concat=n={len(scenes)}:v=1:a=0[outv]")
     out = tmp / "video.mp4"
+    # `-preset ultrafast`: this is a throwaway intermediate — when captions are
+    # burned it gets re-encoded again in `_finalize`, so spend no CPU on its
+    # compression here.
     _run_ffmpeg(
         [*inputs, "-filter_complex", ";".join(filters),
-         "-map", "[outv]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(out)],
+         "-map", "[outv]", "-c:v", "libx264", "-preset", "ultrafast",
+         "-pix_fmt", "yuv420p", "-an", str(out)],
         stage="concat",
     )
     return out
@@ -272,6 +265,12 @@ def _mix_audio(
 
     ffmpeg input indices are assigned per *added* input — never by scene
     index — so a gap (a scene with no narration) doesn't desync the graph.
+
+    NB: `adelay` alone (no `apad`). `apad` with no length argument pads to
+    *infinity*, and with `amix=duration=longest` that makes the mix run
+    forever (ffmpeg only stops at the timeout). `amix=longest` already extends
+    the output to the longest real input, so each delayed narration stays
+    finite and the mix terminates.
     """
     inputs: list[str] = []
     filters: list[str] = []
@@ -281,7 +280,7 @@ def _mix_audio(
     for s in scenes:
         if s.narration_path is not None:
             inputs += ["-i", str(s.narration_path)]
-            filters.append(f"[{ff_idx}:a]adelay={offset_ms}|{offset_ms},apad[v{ff_idx}]")
+            filters.append(f"[{ff_idx}:a]adelay={offset_ms}|{offset_ms}[v{ff_idx}]")
             mix_labels.append(f"[v{ff_idx}]")
             ff_idx += 1
         offset_ms += int(s.duration * 1000)
@@ -379,11 +378,15 @@ def _finalize(
 
     args = [*inputs]
     if srt is not None and burn:
-        # `subtitles` filter: forward slashes + escaped colons on macOS/Linux.
-        # The filter reads the SRT directly, so it is NOT a `-i` input.
+        # The `subtitles` filter reads the SRT directly (NOT a `-i` input).
+        # The path is from `tempfile` (no quotes/brackets/backslashes), so
+        # escaping the `:` is the only filtergraph-special char we can hit.
         srt_arg = str(srt).replace(":", r"\:")
+        # This is the deliverable encode (the burn path re-encodes video, so the
+        # concat intermediate stays `ultrafast`); `veryfast` keeps it well under
+        # the ffmpeg timeout with negligible quality loss at these durations.
         args += ["-filter_complex", f"[0:v]subtitles='{srt_arg}'[vout]", "-map", "[vout]",
-                 "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+                 "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
     else:
         args += ["-map", "0:v", "-c:v", "copy"]
     if audio_idx is not None:
@@ -454,7 +457,6 @@ def compose_final(b2_run, b1_run, spec: StoryboardSpec) -> tuple[Asset, list[str
     best-effort track — video→still, narration, music — degraded. A scene is
     only fatal when BOTH its video clip and keyframe are missing.
     """
-    import time
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg binary not found on PATH — see infra/README.md")
 
@@ -463,15 +465,16 @@ def compose_final(b2_run, b1_run, spec: StoryboardSpec) -> tuple[Asset, list[str
     with tempfile.TemporaryDirectory(prefix="genblaze-compose-") as tmp_str:
         tmp = Path(tmp_str)
         scenes = _group_scenes(b2_run, b1_run, spec, tmp)
-        # Notices computed after grouping succeeds (any still-fallback scene is
-        # confirmed renderable); compute before the temp dir closes.
-        notices = degradation_notices(b2_run, spec)
+        music_path = _download_music(b2_run, tmp)
+        # Notices derive from the grouped bundles + music presence (single
+        # source of layout truth); `_finalize_with_captions` may append a
+        # caption-degradation notice below.
+        notices = degradation_notices(scenes, music_path is not None)
         logger.info("compose start", extra={
             "run_id": run_id, "scene_count": len(spec.scenes),
             "total_duration_sec": spec.total_duration_sec,
             "degradation_notices": notices,
         })
-        music_path = _download_music(b2_run, tmp)
 
         video_only = _concat_video(scenes, tmp)
         audio_mix = _mix_audio(scenes, music_path, tmp)
@@ -487,6 +490,9 @@ def compose_final(b2_run, b1_run, spec: StoryboardSpec) -> tuple[Asset, list[str
                 "run_id": run_id, "exception": str(exc),
             })
 
+        # Whole-file read into RAM (then hashed + uploaded) is the deliberate
+        # simple choice for a sample — a 30-60s MP4 is tens of MB. Stream from
+        # disk via a file handle if this ever serves large outputs concurrently.
         final_bytes = final_path.read_bytes()
         key = f"{PREFIX}/{run_id}/final.mp4"
         backend().put(key, final_bytes, content_type="video/mp4")

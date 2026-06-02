@@ -36,7 +36,16 @@ export type SseFrame =
       asset_url: string;
       media_type?: string;
     }
-  | { kind: "compose.complete"; asset: Asset; spec: import("./storyboard").StoryboardSpec; run_id: string }
+  | {
+      kind: "compose.complete";
+      asset: Asset;
+      spec: import("./storyboard").StoryboardSpec;
+      run_id: string;
+      // Durable B2 URL of the Stage B2 Manifest JSON — provenance for the
+      // final MP4 (pipeline name, parent_run_id, per-step assets, canonical
+      // hash). Optional because older backends may not have shipped it.
+      manifest_uri?: string | null;
+    }
   // Best-effort degradation (e.g. narration/music unavailable). Warning, not
   // a failure — the run still completes with a final MP4.
   | { kind: "notice"; stage: string; message: string }

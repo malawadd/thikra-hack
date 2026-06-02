@@ -13,6 +13,7 @@ from app.repo.pipelines import (
     presign_asset_url,
     probe_storage,
     sink,
+    snap_scene_durations,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "presign_asset_url",
     "probe_storage",
     "sink",
+    "snap_scene_durations",
 ]

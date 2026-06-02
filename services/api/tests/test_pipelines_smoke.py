@@ -20,11 +20,13 @@ os.environ.setdefault("B2_REGION", "us-west-004")
 os.environ.setdefault("B2_KEY_ID", "_")
 os.environ.setdefault("B2_APPLICATION_KEY", "_")
 
+from app.config import settings
 from app.repo import pipelines
 from app.repo.pipelines import (
     PIPELINE_NAME,
     build_keyframe_pipeline,
     build_media_pipeline,
+    snap_scene_durations,
 )
 from app.types.storyboard import Scene, StoryboardSpec
 
@@ -83,3 +85,44 @@ def test_media_pipeline_built_without_preflight(monkeypatch) -> None:
     assert p._preflight is False
     # (video, tts) per scene + one trailing music step.
     assert len(p._steps) == 2 * len(spec.scenes) + 1
+
+
+def test_snap_scene_durations_quantizes_to_kling_grid(monkeypatch) -> None:
+    """GMICloud Kling i2v renders 5s/10s clips only — every scene snaps to the
+    nearest supported length and the total is recomputed; the source spec is
+    left untouched (a copy is returned)."""
+    monkeypatch.setattr(
+        pipelines, "_resolve_video_provider",
+        lambda: ("gmicloud", object(), "Kling-Image2Video-V2.1-Master"),
+    )
+    spec = _spec()
+    spec = spec.model_copy(update={"scenes": [
+        s.model_copy(update={"duration_sec": d})
+        for s, d in zip(spec.scenes, [6.0, 8.0, 5.0, 11.0], strict=True)
+    ]})
+    out = snap_scene_durations(spec)
+    assert [s.duration_sec for s in out.scenes] == [5.0, 10.0, 5.0, 10.0]
+    assert out.total_duration_sec == 30.0
+    # Source spec is not mutated.
+    assert [s.duration_sec for s in spec.scenes] == [6.0, 8.0, 5.0, 11.0]
+
+
+def test_snap_scene_durations_is_noop_for_non_gmicloud(monkeypatch) -> None:
+    """Decart (the legacy path) had no duration grid, so snapping is skipped."""
+    monkeypatch.setattr(
+        pipelines, "_resolve_video_provider",
+        lambda: ("decart", object(), "lucy-2.1"),
+    )
+    spec = _spec()
+    assert snap_scene_durations(spec) is spec
+
+
+def test_instrumental_music_registry_admits_lyrics_and_defaults_instrumental() -> None:
+    """MiniMax-Music requires a `lyrics` field and the default GMICloud family
+    drops it; the override admits `lyrics`/`is_instrumental` and defaults them
+    to a vocal-free score so the music step submits successfully."""
+    spec = pipelines._instrumental_music_registry().get(settings.music_model)
+    assert spec.param_allowlist is not None
+    assert {"lyrics", "is_instrumental"} <= spec.param_allowlist
+    assert spec.param_defaults["is_instrumental"] is True
+    assert spec.param_defaults["lyrics"]  # non-empty required-field placeholder

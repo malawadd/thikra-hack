@@ -13,7 +13,7 @@ from genblaze_openai import chat
 from app.types.storyboard import StoryboardSpec
 
 response = chat(
-    settings.chat_model,                       # e.g. "gpt-4.1-mini"
+    settings.chat_model,                       # default "gpt-4.1-nano"
     prompt=_STORYBOARD_INSTRUCTION.format(seed=prompt),
     api_key=settings.openai_api_key,
     response_format=StoryboardSpec,            # Pydantic class, accepted directly
@@ -31,7 +31,8 @@ which round-trips through `StoryboardSpec`.
 
 `genblaze-openai` 0.3.0 ships these surfaces:
 
-- `DalleProvider` — a `BaseProvider` class for image generation.
+- `DalleProvider` — a `BaseProvider` class for image generation. (This sample
+  uses Google `ImagenProvider` for images, not Dalle — see media-generation.md.)
 - `SoraProvider` — a `BaseProvider` class for video.
 - `OpenAITTSProvider` — a `BaseProvider` class for TTS.
 - **`chat()` / `achat()`** — standalone functions at

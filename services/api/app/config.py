@@ -24,9 +24,12 @@ class Settings(BaseSettings):
 
     # --- Provider keys ---
     # OpenAI hosts the storyboard chat (`genblaze_openai.chat()` — function,
-    # not a Provider class, so Stage A is not a Pipeline). NVIDIA still
-    # carries Stage B2 TTS via `NvidiaAudioProvider`.
+    # not a Provider class, so Stage A is not a Pipeline). Google hosts
+    # the keyframe image generation via Imagen. NVIDIA still carries
+    # Stage B2 TTS; GMICloud handles the music score AND is the
+    # designated fallback video provider when Decart is unavailable.
     openai_api_key: str = ""
+    google_api_key: str = ""
     decart_api_key: str = ""
     nvidia_api_key: str = ""
     gmi_api_key: str = ""
@@ -38,11 +41,25 @@ class Settings(BaseSettings):
     # ~30-50% lower than gpt-4.1-mini on this prompt shape; schema fidelity
     # is unchanged because nano is part of the same gpt-4.1 family.
     chat_model: str = "gpt-4.1-nano"
-    # Stage B1 — keyframe. gpt-image-1 is the current OpenAI live model id
-    # (gpt-image-2 is the documented upgrade target; flip via env when shipped).
-    image_model: str = "gpt-image-1"
-    # Stage B2 — Decart image-to-video.
-    video_model: str = "lucy-pro"
+    # Stages B0/B1 — Imagen image generation (Imagen 4 is the latest gen on the
+    # Gemini API; 3.0 is retired). `imagen-4.0-generate-001` is the flagship;
+    # `-ultra-` is max quality (slower/pricier), `-fast-` the cheapest. The
+    # flagship balances quality and the per-scene fan-out cost; flip via env.
+    image_model: str = "imagen-4.0-generate-001"
+    # Stage B2 — image-to-video. `video_provider` selects which Genblaze
+    # provider drives the per-scene clips: `gmicloud` (default, Kling
+    # Image2Video) or `decart`. Default is GMICloud because Decart RETIRED
+    # image-to-video — its current Lucy models are video-to-video only, so
+    # they can't animate a keyframe. If the selected provider's key is missing
+    # at boot we swap to the other and log it; the run still completes.
+    video_provider: str = "gmicloud"
+    # Decart video model — only used if `video_provider=decart`. NOTE: Decart
+    # no longer offers image-to-video (lucy-* are video-to-video now), so this
+    # path can't drive the keyframe→clip step; kept for the fallback resolver.
+    video_model: str = "lucy-2.1"
+    # GMICloud image-to-video model (the working i2v path). Kling V2.1 Master
+    # takes the keyframe (routed from step inputs) + a motion prompt.
+    gmi_video_model: str = "Kling-Image2Video-V2.1-Master"
     # Stage B2 — NVIDIA TTS. The `nvidia/` namespace is required; a bare
     # `magpie-tts-multilingual` 404s the NIM genai endpoint (the provider's
     # voice family only matches `^nvidia/...` slugs).

@@ -5,8 +5,8 @@
 ```
 User                Web (Next.js)              FastAPI                Genblaze + Providers              B2
  │                       │                        │                            │                        │
- │ "kid's intro to       │                        │                            │                        │
- │  solar panels"        │                        │                            │                        │
+ │ "how LLMs think       │                        │                            │                        │
+ │  step by step"        │                        │                            │                        │
  ├──────────────────────►│ POST /api/proxy/       │                            │                        │
  │                       │     runs/storyboard    │                            │                        │
  │                       ├───────────────────────►│ generate_storyboard(prompt)│                        │
@@ -28,7 +28,7 @@ User                Web (Next.js)              FastAPI                Genblaze +
  │                       │                        │  else generate_storyboard) │                        │
  │                       │                        ├── build_keyframe_pipeline  │                        │
  │                       │                        │   .stream()                │                        │
- │                       │                        ├───────────────────────────►│ DalleProvider × N      │
+ │                       │                        ├───────────────────────────►│ ImagenProvider × N     │
  │                       │                        │                            ├── PNG_i → B2 ─────────►│
  │                       │◄─ SSE: stream events ──┤                            │                        │
  │                       │                        │◄── PipelineCompletedEvent  │                        │
