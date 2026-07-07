@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     decart_api_key: str = ""
     nvidia_api_key: str = ""
     gmi_api_key: str = ""
+    # Kitchen-sink providers (newly released adapters). Each key gates one
+    # vendor in the switchboard; a missing key greys that vendor out in the UI
+    # (`/providers` reports `key_available`). The constructor kwarg differs by
+    # vendor (api_token / api_secret / auth_token / api_key) — the catalog
+    # factory passes the right one; these field names are OUR env contract.
+    replicate_api_token: str = ""   # multi-modal: image + video + music
+    runway_api_secret: str = ""     # video (Runway Gen)
+    luma_api_key: str = ""          # video (Luma Dream Machine)
+    elevenlabs_api_key: str = ""    # TTS
+    lmnt_api_key: str = ""          # TTS
+    hume_api_key: str = ""          # TTS (Hume Octave)
 
     # --- Model defaults (override via env) ---
     # Stage A — storyboard chat via `genblaze_openai.chat()`. gpt-4.1-nano

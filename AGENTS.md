@@ -30,46 +30,68 @@ directly. The only custom DTOs in this codebase are request bodies
 model doesn't have, file SDK feedback — don't shadow the type with a
 mirrored Pydantic class.
 
-### Rule 3: `genblaze_*` imports live in `app/repo/pipelines.py`
+### Rule 3: provider classes live in `app/repo/provider_catalog.py`
 
-- `pipelines.py` is the only file that imports provider classes
-  (`DalleProvider`, `DecartVideoProvider`, etc.), `Pipeline`, and the
-  standalone `genblaze_openai.chat()` function used for Stage A.
+This sample is a provider switchboard — any provider can drive any modality,
+chosen per-run. The provider-import surface is the catalog, not pipelines.
+
+- `provider_catalog.py` is the only file that imports provider CLASSES
+  (`ImagenProvider`, `RunwayProvider`, `ReplicateProvider`, etc.). It exposes
+  a `CatalogEntry` per `(slot, vendor)` with a `make()` factory + quirks.
+- `pipelines.py` imports only `genblaze_openai.chat` (the standalone
+  storyboard function — not a provider) and `genblaze_core` types/`Pipeline`.
+  It resolves a `CatalogEntry` (passed by the caller) and calls `entry.make()`.
 - `composer.py` may import `genblaze_core` *types* only
-  (`Asset`, `Manifest`, `Mp4Handler` from `genblaze_core.media`) — no
-  `Pipeline` or `Provider` use.
+  (`Asset`, `Manifest`, `Mp4Handler`) — no `Pipeline`/`Provider` use.
 - `main.py` / `app/types/**` may not import from any `genblaze_*` package.
-  Use the re-exports in `app/repo/__init__.py` instead.
+  `main.py` consumes the catalog via `app.repo.provider_catalog`.
 
-The structural test
-(`test_pipelines_is_the_only_genblaze_provider_consumer`) enforces this.
+The structural test (`test_genblaze_provider_imports_confined`) enforces this:
+provider-package imports are allowed only in `provider_catalog.py` and
+`pipelines.py`.
 
-### Rule 4: adding a new provider = one `.step()` in `pipelines.py`
+### Rule 4: adding a new provider = one `CatalogEntry`
 
 When the next provider lands on PyPI as `genblaze-<vendor>`:
 
 1. Add the dependency to `services/api/pyproject.toml` and re-pin
-   `requirements.txt` with `uv pip compile`.
-2. Import the provider class in `app/repo/pipelines.py` (no other file).
-3. Wire it into the appropriate stage as a `.step()`. The slug
-   (`PIPELINE_NAME`) does NOT change — Manifest lineage handles
-   differentiation through `parent_run_id`.
-4. If the new provider produces audio/video/image assets that the
-   composer needs to read, extend `_group_scenes()` in `composer.py`.
-5. Update `docs/features/media-generation.md`.
+   `requirements.txt` with `uv pip compile`. (New adapters require
+   `genblaze-core>=0.3.4`.)
+2. Import the provider class in `app/repo/provider_catalog.py` (no other file)
+   and add ONE `CatalogEntry` to the relevant slot in `CATALOG`: the `make()`
+   factory (with the right key kwarg — `api_key`/`api_token`/`api_secret`/
+   `auth_token`), `env_key`, a curated `default_model` + `suggested_models`,
+   and any quirks (`image_handoff` for video, `snap_durations` for a clip
+   grid, registry overrides baked into `make()`).
+3. If it needs a NEW API key, add the field to `config.py`, `.env.example`,
+   and the startup/`/health` provider dicts in `main.py`.
+4. The pipeline slug (`PIPELINE_NAME`) does NOT change — Manifest lineage
+   differentiates via `parent_run_id`. `pipelines.py` needs NO edit.
+5. If the provider produces assets the composer reads differently, extend
+   `_group_scenes()` in `composer.py`.
+6. Add the default model to the conformance test's expectations (it auto-runs
+   over every `CATALOG` entry) and update `docs/features/media-generation.md`.
 
-### Rule 5: cross-pipeline asset handoff uses the `image=<presigned>` kwarg
+### Rule 5: cross-pipeline asset handoff style is data on the catalog entry
 
-Genblaze 0.3.x `from_result()` only records lineage; it does NOT
-hydrate prior step assets into provider kwargs. The Stage B1 → Stage B2
-image-to-video handoff therefore goes through
-`presign_asset_url(...)` + the `image=` provider kwarg, matching the
-canonical pattern in `genblaze-gmicloud-pipeline.build_video_fanout`.
+Genblaze 0.3.x `from_result()` only records lineage; it does NOT hydrate
+prior step assets into provider kwargs. The Stage B1 → Stage B2
+image-to-video handoff goes through `presign_asset_url(...)` plus the style
+declared by `video_entry.image_handoff`:
 
-Do not introduce `input_from=<step_index>` for cross-pipeline handoffs.
-`input_from=` is for within-pipeline fan-out from a shared upstream
-step (this sample doesn't use it; the fan-out is at `max_concurrency=3`
-across sibling `.step()` calls within a single Pipeline).
+- `"external_inputs"` (the DEFAULT for nearly every provider — Kling, Runway,
+  Luma, Replicate, Veo, Sora): the keyframe is passed as an
+  `external_inputs=[Asset(...)]`; these providers route the image from step
+  inputs and would DROP a bare `image=` kwarg.
+- `"image_kwarg"` (legacy, Decart only): the presigned URL is passed as
+  `image=`.
+
+`pipelines.build_media_pipeline` branches on `image_handoff`; adding a video
+provider means setting the right value on its `CatalogEntry`, not editing the
+branch. Do not introduce `input_from=<step_index>` for cross-pipeline
+handoffs — `input_from=` is for within-pipeline fan-out from a shared upstream
+step (this sample doesn't use it; the fan-out is `max_concurrency=3` across
+sibling `.step()` calls within a single Pipeline).
 
 ### Rule 6: composer is the ONLY ffmpeg surface
 

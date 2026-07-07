@@ -1,17 +1,22 @@
-"""Genblaze pipeline factories — the only file that imports `genblaze_*` for pipelines.
+"""Genblaze pipeline factories — provider selection is delegated to the catalog.
 
-Stage A is a one-shot `genblaze_openai.chat()` call (a standalone function,
-NOT a `BaseProvider`), so it cannot ride `Pipeline.step()`. Stages B1 and B2
-are linked Pipelines; B2 reaches into B1's PipelineResult and hands each
-keyframe asset to `DecartVideoProvider` via the canonical `image=<presigned>`
-kwarg (`from_result()` only records lineage in 0.3.x).
+Provider CLASSES are imported only in `provider_catalog.py`; this file resolves
+a per-run `CatalogEntry` (via the caller) and calls `entry.make()`. The lone
+direct `genblaze_*` import here is `genblaze_openai.chat` — the standalone
+storyboard function, which is NOT a `BaseProvider` and so can't ride
+`Pipeline.step()`.
+
+Stages B1 and B2 are linked Pipelines; B2 reaches into B1's PipelineResult and
+hands each keyframe asset to the chosen video provider. The handoff style is
+data on the catalog entry: `external_inputs` (the dominant pattern — Kling,
+Runway, Luma, Replicate, Veo, Sora) or the legacy `image=` kwarg (Decart).
+`from_result()` only records lineage in 0.3.x — it does not hydrate assets.
 """
 
 import json
 import logging
 import time
 import uuid
-from dataclasses import replace
 from functools import lru_cache
 
 from genblaze_core import (
@@ -23,16 +28,11 @@ from genblaze_core import (
     StepCache,
 )
 from genblaze_core.observability import CompositeTracer, LoggingTracer, OTelTracer
-from genblaze_core.providers.model_registry import ModelRegistry
-from genblaze_decart import DecartVideoProvider
-from genblaze_gmicloud import GMICloudAudioProvider, GMICloudVideoProvider
-from genblaze_gmicloud.models.audio import build_audio_registry
-from genblaze_google import ImagenProvider
-from genblaze_nvidia import NvidiaAudioProvider
 from genblaze_openai import chat
 from genblaze_s3 import S3StorageBackend
 
 from app.config import settings
+from app.repo.provider_catalog import CatalogEntry
 from app.types.storyboard import StoryboardSpec
 
 PIPELINE_NAME = "genblaze-gen-media-multi-provider-sample"
@@ -119,16 +119,22 @@ _STORYBOARD_INSTRUCTION = (
 )
 
 
-def generate_storyboard(prompt: str) -> tuple[StoryboardSpec, str]:
+def generate_storyboard(prompt: str, model: str | None = None) -> tuple[StoryboardSpec, str]:
     """Stage A — one-shot OpenAI chat call via `genblaze_openai.chat()`.
 
     `chat()` is a standalone function (not a `BaseProvider`), so it can't
     ride `Pipeline.step()`. We persist the JSON to B2 by hand under a
     UUID-keyed prefix since there is no Pipeline Manifest for this call.
     Returns the parsed spec and the B2 object key for inspection.
+
+    `model` is the chat-slot selection (`None` → `settings.chat_model`). Chat
+    is the one modality not generalized across vendors: the storyboard relies
+    on OpenAI's structured-output (`response_format=`) contract, so the catalog
+    exposes only the OpenAI chat entry today.
     """
+    model = model or settings.chat_model
     logger.info("storyboard generate start", extra={
-        "model": settings.chat_model,
+        "model": model,
         "prompt_chars": len(prompt),
         # Truncate at 240 chars — enough to recognise the prompt, short
         # enough that the log line stays scannable in a terminal.
@@ -137,14 +143,14 @@ def generate_storyboard(prompt: str) -> tuple[StoryboardSpec, str]:
     start = time.perf_counter()
     try:
         response = chat(
-            settings.chat_model,
+            model,
             prompt=_STORYBOARD_INSTRUCTION.format(seed=prompt),
             api_key=settings.openai_api_key,
             response_format=StoryboardSpec,
         )
     except Exception:
         logger.exception("storyboard chat failed", extra={
-            "model": settings.chat_model,
+            "model": model,
             "duration_ms": int((time.perf_counter() - start) * 1000),
         })
         raise
@@ -156,7 +162,7 @@ def generate_storyboard(prompt: str) -> tuple[StoryboardSpec, str]:
         content_type="application/json",
     )
     logger.info("storyboard generate ok", extra={
-        "model": settings.chat_model,
+        "model": model,
         "duration_ms": int((time.perf_counter() - start) * 1000),
         "title": spec.title,
         "style_prompt": spec.style_prompt,
@@ -181,60 +187,48 @@ def generate_storyboard(prompt: str) -> tuple[StoryboardSpec, str]:
 
 # --- Stage B1: keyframe fan-out ---------------------------------------------
 
-def _imagen() -> ImagenProvider:
-    """Shared Imagen provider — Google's image-generation surface.
-
-    Replaces the previous OpenAI DalleProvider in Stages B0 + B1. Imagen
-    is generate-only (no edit endpoint), so style consistency between B0
-    and B1 still comes from the shared `style_prompt` prefix, not from
-    CLIP-style image conditioning.
-    """
-    return ImagenProvider(api_key=settings.google_api_key)
-
-
-def build_reference_pipeline(spec: StoryboardSpec) -> Pipeline:
+def build_reference_pipeline(spec: StoryboardSpec, image_entry: CatalogEntry,
+                             image_model: str) -> Pipeline:
     """Stage B0 — generate ONE master reference image from `style_prompt`.
 
     The image is the visual anchor for the entire run; its prompt is
     prefixed onto every Stage B1 per-scene generation so all keyframes
-    share a look.
+    share a look. The image provider is whatever the run selected
+    (`image_entry`); generate-only providers (e.g. Imagen) get consistency
+    from the shared `style_prompt` prefix, not from image conditioning.
     """
     logger.info("build B0 pipeline", extra={
-        "stage": "B0.reference",
-        "model": settings.image_model,
-        "provider": "google/imagen",
+        "stage": "B0.reference", "model": image_model, "provider": image_entry.vendor,
     })
     reference_prompt = f"Style reference frame for an explainer video. {spec.style_prompt}"
     logger.info("B0 step queued", extra={
         "stage": "B0.reference", "step_index": 0,
-        "model": settings.image_model, "provider": "google/imagen",
-        "prompt": reference_prompt,
+        "model": image_model, "provider": image_entry.vendor, "prompt": reference_prompt,
     })
     return _attach(Pipeline(PIPELINE_NAME, max_concurrency=1)).step(
-        _imagen(),
-        model=settings.image_model,
+        image_entry.make(),
+        model=image_model,
         modality=Modality.IMAGE,
         prompt=reference_prompt,
     )
 
 
-def build_keyframe_pipeline(spec: StoryboardSpec, reference_result=None) -> Pipeline:
+def build_keyframe_pipeline(spec: StoryboardSpec, image_entry: CatalogEntry,
+                            image_model: str, reference_result=None) -> Pipeline:
     """Stage B1 — one `.step()` per scene, fanned out at max_concurrency=3.
 
     Prefixes every per-scene `image_prompt` with `spec.style_prompt` so the
-    Imagen outputs visually rhyme with the Stage B0 reference frame. If
+    outputs visually rhyme with the Stage B0 reference frame. If
     `reference_result` is supplied, B1's Manifest carries it as
-    `parent_run_id` (lineage only — the actual reference image is not
-    passed as a provider input).
+    `parent_run_id` (lineage only — the reference image is not passed as a
+    provider input).
     """
     logger.info("build B1 pipeline", extra={
-        "stage": "B1.keyframes",
-        "model": settings.image_model,
-        "provider": "google/imagen",
+        "stage": "B1.keyframes", "model": image_model, "provider": image_entry.vendor,
         "scene_count": len(spec.scenes),
         "parent_run_id": getattr(getattr(reference_result, "run", None), "run_id", None),
     })
-    img = _imagen()
+    img = image_entry.make()
     p = _attach(Pipeline(PIPELINE_NAME, max_concurrency=3))
     if reference_result is not None:
         p = p.from_result(reference_result)
@@ -243,88 +237,28 @@ def build_keyframe_pipeline(spec: StoryboardSpec, reference_result=None) -> Pipe
         prompt = f"{style}. {scene.image_prompt}"
         logger.info("B1 step queued", extra={
             "stage": "B1.keyframes", "step_index": i,
-            "model": settings.image_model, "provider": "google/imagen",
+            "model": image_model, "provider": image_entry.vendor,
             "caption": scene.caption, "prompt": prompt,
         })
-        p = p.step(img, model=settings.image_model, modality=Modality.IMAGE, prompt=prompt)
+        p = p.step(img, model=image_model, modality=Modality.IMAGE, prompt=prompt)
     return p
 
 
-def _resolve_video_provider() -> tuple[str, object, str]:
-    """Pick the video provider for Stage B2 based on env + key availability.
+def snap_scene_durations(spec: StoryboardSpec, video_entry: CatalogEntry) -> StoryboardSpec:
+    """Snap scene durations to the selected video provider's supported grid.
 
-    Returns `(provider_label, provider_instance, model_id)`. The label is
-    a short, log-friendly slug (`decart` / `gmicloud`).
-
-    Selection rules:
-      1. If `VIDEO_PROVIDER=gmicloud` is set OR `decart` is requested but
-         `DECART_API_KEY` is empty, swap to GMICloud's image-to-video
-         provider (Kling by default) when its key is configured.
-      2. Otherwise default to Decart (`lucy-pro-i2v`).
-      3. If neither key is configured we still construct Decart so the
-         pipeline can be assembled — the actual step will surface a
-         provider auth error at runtime instead of silently doing nothing.
+    Driven by `video_entry.snap_durations` (e.g. GMICloud Kling renders 5s/10s
+    clips only — any other `duration` 400s). No grid → no-op (returns the spec
+    unchanged). Otherwise returns a copy with each `duration_sec` quantized to
+    the nearest supported value and `total_duration_sec` recomputed, so Stage
+    B2 and the composer agree (`duration_sec` stays the single source of truth).
     """
-    choice = (settings.video_provider or "decart").strip().lower()
-    have_decart = bool(settings.decart_api_key)
-    have_gmi = bool(settings.gmi_api_key)
-    fell_back = False
-    if choice == "decart" and not have_decart and have_gmi:
-        fell_back = True
-        choice = "gmicloud"
-    if choice == "gmicloud":
-        if not have_gmi and have_decart:
-            # Explicit gmicloud asked but no key — fall the other way.
-            fell_back = True
-            choice = "decart"
-        else:
-            logger.info(
-                "video provider resolved",
-                extra={"provider": "gmicloud", "model": settings.gmi_video_model,
-                       "fell_back": fell_back},
-            )
-            return (
-                "gmicloud",
-                GMICloudVideoProvider(api_key=settings.gmi_api_key),
-                settings.gmi_video_model,
-            )
-    # Decart path (default + post-swap fallback target).
-    logger.info(
-        "video provider resolved",
-        extra={"provider": "decart", "model": settings.video_model,
-               "fell_back": fell_back,
-               "key_present": have_decart},
-    )
-    if not have_decart:
-        logger.warning(
-            "video provider has no key configured — Stage B2 video will error",
-            extra={"provider": "decart"},
-        )
-    return ("decart", DecartVideoProvider(api_key=settings.decart_api_key), settings.video_model)
-
-
-# --- Stage B2 helpers: duration grid + instrumental music override ---------
-
-# Kling Image2Video V2.1 (the GMICloud video model) renders ONLY 5s or 10s
-# clips — any other duration 400s ("duration value 'N' is invalid"). We snap
-# each scene to the nearest supported length so the video step is accepted AND
-# the composer's still/caption/audio timing (all keyed off `duration_sec`)
-# matches the real clip — `duration_sec` stays the single source of truth.
-_KLING_DURATIONS = (5.0, 10.0)
-
-
-def snap_scene_durations(spec: StoryboardSpec) -> StoryboardSpec:
-    """Snap scene durations to the active video provider's supported grid.
-
-    No-op for any provider but GMICloud Kling (Decart, the legacy path, had no
-    such constraint). Returns a copy with normalized `duration_sec` and a
-    recomputed `total_duration_sec` so downstream B2 + composition agree.
-    """
-    if _resolve_video_provider()[0] != "gmicloud":
+    grid = video_entry.snap_durations
+    if not grid:
         return spec
     scenes = [
         s.model_copy(update={
-            "duration_sec": min(_KLING_DURATIONS, key=lambda d: abs(d - s.duration_sec)),
+            "duration_sec": min(grid, key=lambda d: abs(d - s.duration_sec)),
         })
         for s in spec.scenes
     ]
@@ -334,62 +268,42 @@ def snap_scene_durations(spec: StoryboardSpec) -> StoryboardSpec:
     })
 
 
-def _instrumental_music_registry() -> ModelRegistry:
-    """Audio registry override that makes MiniMax-Music produce an INSTRUMENTAL bed.
-
-    GMICloud's MiniMax-Music family requires a `lyrics` payload field and drops
-    any param outside its allowlist (so a bare prompt 400s with
-    "lyrics (Required parameter is missing)"). We want a vocal-free score, so we
-    register a per-model override that (1) admits MiniMax's `lyrics` +
-    `is_instrumental` controls and (2) defaults them to an instrumental track —
-    `is_instrumental=True` with the documented `[Inst]` lyrics marker as the
-    required-but-unused placeholder. Music stays best-effort: if GMICloud ever
-    rejects these the step just fails and the composer renders a silent video.
-    """
-    reg = build_audio_registry()
-    base = reg.get(settings.music_model)
-    reg.register(replace(
-        base,
-        param_allowlist=(base.param_allowlist or frozenset()) | {"lyrics", "is_instrumental"},
-        param_defaults={**dict(base.param_defaults), "lyrics": "[Inst]", "is_instrumental": True},
-    ))
-    return reg
-
-
 # --- Stage B2: image-to-video + TTS per scene + music (single trailing) ----
 
-def build_media_pipeline(spec: StoryboardSpec, keyframe_result) -> Pipeline:
-    """Stage B2 — Decart video + NVIDIA TTS per scene, then one GMI music step.
+def build_media_pipeline(
+    spec: StoryboardSpec, keyframe_result, *,
+    video_entry: CatalogEntry, video_model: str,
+    tts_entry: CatalogEntry, tts_model: str,
+    music_entry: CatalogEntry, music_model: str,
+) -> Pipeline:
+    """Stage B2 — per-scene video + TTS, then one trailing music step.
 
-    Image-to-video handoff goes through `image=<presigned-url>`, NOT
-    `input_from=` — `from_result()` only records lineage in 0.3.x. Same
-    pattern as `genblaze-gmicloud-pipeline.build_video_fanout`.
+    All three tracks use the run's selected providers (the `*_entry` args).
+    The keyframe→video handoff style is data on `video_entry.image_handoff`:
+    `external_inputs` (Kling/Runway/Luma/Replicate/Veo/Sora route the image
+    from step inputs) or the legacy `image=` kwarg (Decart). `from_result()`
+    only records lineage in 0.3.x — it does not hydrate assets.
 
-    Built with `preflight=False` because narration (TTS) and music are
-    best-effort: a DEAD audio model must NOT abort the run at preflight
-    (which validates every step before any runs). With preflight off such a
-    model fails at *runtime* as a single FAILED step, and the caller runs
-    this pipeline with `fail_fast=False, raise_on_failure=False` so video
-    siblings still complete. The composer degrades gracefully on the missing
-    audio asset (silent/partial mix) and surfaces a notice; video remains
-    the essential track (the composer raises if a scene clip is missing).
+    Built with `preflight=False` because video, narration, and music are all
+    best-effort: a DEAD model must NOT abort the run at preflight (which
+    validates every step before any runs). With preflight off such a model
+    fails at *runtime* as a single FAILED step, and the caller runs this
+    pipeline `fail_fast=False, raise_on_failure=False` so siblings still
+    complete. The composer degrades on a missing asset (failed video → the
+    scene's keyframe still; failed audio → silent/partial mix) and surfaces a
+    notice.
     """
-    video_label, vid, resolved_video_model = _resolve_video_provider()
     logger.info("build B2 pipeline", extra={
-        "stage": "B2.media",
-        "scene_count": len(spec.scenes),
-        "video_provider": video_label,
-        "video_model": resolved_video_model,
-        "tts_model": settings.tts_model,
-        "music_model": settings.music_model,
+        "stage": "B2.media", "scene_count": len(spec.scenes),
+        "video_provider": video_entry.vendor, "video_model": video_model,
+        "tts_provider": tts_entry.vendor, "tts_model": tts_model,
+        "music_provider": music_entry.vendor, "music_model": music_model,
+        "image_handoff": video_entry.image_handoff,
         "parent_run_id": getattr(keyframe_result.run, "run_id", None),
     })
-    tts = NvidiaAudioProvider(api_key=settings.nvidia_api_key)
-    # Custom registry so MiniMax-Music gets the `lyrics`/`is_instrumental`
-    # payload fields it requires, defaulted to a vocal-free score.
-    music = GMICloudAudioProvider(
-        api_key=settings.gmi_api_key, models=_instrumental_music_registry(),
-    )
+    vid = video_entry.make()
+    tts = tts_entry.make()
+    music = music_entry.make()
 
     p = _attach(
         Pipeline(PIPELINE_NAME, max_concurrency=3, preflight=False)
@@ -399,48 +313,36 @@ def build_media_pipeline(spec: StoryboardSpec, keyframe_result) -> Pipeline:
         image_ref = presign_asset_url(image_asset.url)
         logger.info("B2 scene queued", extra={
             "stage": "B2.media", "scene_index": i,
-            "video_provider": video_label,
-            "video_model": resolved_video_model,
-            "tts_model": settings.tts_model,
-            "motion_prompt": scene.motion_prompt,
-            "narration": scene.narration,
+            "video_provider": video_entry.vendor, "video_model": video_model,
+            "tts_provider": tts_entry.vendor, "tts_model": tts_model,
+            "motion_prompt": scene.motion_prompt, "narration": scene.narration,
             "duration_sec": scene.duration_sec,
             # Truncate the presigned URL: keep the key part, drop the
             # SigV4 noise. The full URL hits debug-only via presign log.
             "image_ref_key": backend().key_from_url(image_asset.url),
         })
-        # Cross-provider keyframe handoff differs by video provider:
-        #  - GMICloud Kling routes the image from step INPUTS (its family uses
-        #    `route_images(slots=("image",))`), so hand it the presigned
-        #    keyframe as an `external_inputs` Asset — an `image=` kwarg would be
-        #    dropped by the param allowlist and Kling 400s "image required".
-        #  - Decart's (now-retired) image-to-video took the URL via `image=`.
         video_kwargs: dict = {
-            "model": resolved_video_model,
+            "model": video_model,
             "modality": Modality.VIDEO,
             "prompt": scene.motion_prompt,
             "duration": scene.duration_sec,
         }
-        if video_label == "gmicloud":
+        # Keyframe handoff: most providers route the image from step INPUTS
+        # (an `external_inputs` Asset); a bare `image=` kwarg would be dropped
+        # by their param allowlist. Decart's legacy i2v took the URL via `image=`.
+        if video_entry.image_handoff == "external_inputs":
             video_kwargs["external_inputs"] = [Asset(url=image_ref, media_type="image/png")]
         else:
             video_kwargs["image"] = image_ref
         p = p.step(vid, **video_kwargs)
-        p = p.step(
-            tts,
-            model=settings.tts_model,
-            modality=Modality.AUDIO,
-            prompt=scene.narration,
-        )
+        p = p.step(tts, model=tts_model, modality=Modality.AUDIO, prompt=scene.narration)
     logger.info("B2 music queued", extra={
-        "stage": "B2.media", "model": settings.music_model,
-        "provider": "gmicloud",
-        "prompt": spec.music_prompt,
-        "duration_sec": spec.total_duration_sec,
+        "stage": "B2.media", "model": music_model, "provider": music_entry.vendor,
+        "prompt": spec.music_prompt, "duration_sec": spec.total_duration_sec,
     })
     return p.step(
         music,
-        model=settings.music_model,
+        model=music_model,
         modality=Modality.AUDIO,
         prompt=spec.music_prompt,
         duration=spec.total_duration_sec,

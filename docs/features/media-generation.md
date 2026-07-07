@@ -2,7 +2,24 @@
 
 Stage B0 generates one reference image; Stage B1 generates one keyframe per
 scene; Stage B2 turns each keyframe into a short video clip, narrates it, and
-lays a music bed underneath. Five providers run inside linked pipelines.
+lays a music bed underneath.
+
+This is a **provider switchboard**: every modality (script, image, video, TTS,
+music) can be driven by ANY provider in the catalog, chosen per-run. The UI's
+Providers panel is fed by `GET /providers`; the selection rides the
+`MediaRequest.selection` body and `pipelines.py` resolves each
+`CatalogEntry` from `app/repo/provider_catalog.py`. The default selection is
+the **simplest path** (fewest API keys): Replicate drives image/video/music
+(one token) and OpenAI drives chat + TTS — two keys to run end-to-end.
+
+## Model selection: curated default + free-text override
+
+Genblaze providers validate model slugs against regex families at call time;
+`provider.list_models()` returns NOTHING enumerable. So model dropdowns are NOT
+SDK-sourced — each `CatalogEntry` ships a curated `default_model` plus
+`suggested_models` hints, and the UI allows a free-text override. A blank model
+field means "use the vendor's default". Bad slugs surface at preflight/runtime
+(classified like any provider error), not in the request validator.
 
 ## Stages B0/B1 — Reference + keyframes (Google Imagen)
 
@@ -133,17 +150,63 @@ Each fallback emits a `notice` SSE frame (e.g. "Video unavailable for scene 3
 — used the keyframe still instead") the UI shows as a warning. The final MP4
 always renders.
 
-## Provider table
+## Provider catalog (the switchboard matrix)
 
-| Provider                | Class                   | Env var          | Default model                              |
-|-------------------------|-------------------------|------------------|--------------------------------------------|
-| Google image (B0/B1)    | `ImagenProvider`        | `GOOGLE_API_KEY` | `imagen-4.0-generate-001`             |
-| GMICloud image-to-video | `GMICloudVideoProvider` | `GMI_API_KEY`    | `Kling-Image2Video-V2.1-Master`            |
-| NVIDIA TTS              | `NvidiaAudioProvider`   | `NVIDIA_API_KEY` | `nvidia/magpie-tts-multilingual`           |
-| GMICloud music          | `GMICloudAudioProvider` | `GMI_API_KEY`    | `minimax-music-2.5`                        |
+All provider classes are imported only by `app/repo/provider_catalog.py`.
+Adding one is a single `CatalogEntry` (see AGENTS Rule 4). `*` on Replicate/LMNT
+means the provider accepts any slug (no model families).
 
-All are imported only by `app/repo/pipelines.py`. Adding another
-provider is one `.step()` call (see AGENTS Rule 4).
+| Slot  | Vendor      | Class                   | Key env var           | Default model |
+|-------|-------------|-------------------------|-----------------------|---------------|
+| chat  | openai      | `chat()` fn             | `OPENAI_API_KEY`      | `gpt-4.1-nano` |
+| image | replicate   | `ReplicateProvider`     | `REPLICATE_API_TOKEN` | `black-forest-labs/flux-schnell` |
+| image | google      | `ImagenProvider`        | `GOOGLE_API_KEY`      | `imagen-4.0-generate-001` |
+| image | openai      | `DalleProvider`         | `OPENAI_API_KEY`      | `gpt-image-1` |
+| image | nvidia      | `NvidiaImageProvider`   | `NVIDIA_API_KEY`      | `black-forest-labs/flux.1-schnell` |
+| image | decart      | `DecartImageProvider`   | `DECART_API_KEY`      | `lucy-pro-t2i` |
+| video | replicate   | `ReplicateProvider`     | `REPLICATE_API_TOKEN` | `minimax/video-01` |
+| video | gmicloud    | `GMICloudVideoProvider` | `GMI_API_KEY`         | `Kling-Image2Video-V2.1-Master` |
+| video | google      | `VeoProvider`           | `GOOGLE_API_KEY`      | `veo-3.0-generate-001` |
+| video | openai      | `SoraProvider`          | `OPENAI_API_KEY`      | `sora-2` |
+| video | runway      | `RunwayProvider`        | `RUNWAY_API_SECRET`   | `gen4_turbo` |
+| video | luma        | `LumaProvider`          | `LUMA_API_KEY`        | `ray-2` |
+| video | nvidia      | `NvidiaVideoProvider`   | `NVIDIA_API_KEY`      | `nvidia/cosmos-2.0-diffusion-video2world` |
+| video | decart      | `DecartVideoProvider`   | `DECART_API_KEY`      | `lucy-pro-i2v` |
+| tts   | openai      | `OpenAITTSProvider`     | `OPENAI_API_KEY`      | `gpt-4o-mini-tts` |
+| tts   | nvidia      | `NvidiaAudioProvider`   | `NVIDIA_API_KEY`      | `nvidia/magpie-tts-multilingual` |
+| tts   | elevenlabs  | `ElevenLabsTTSProvider` | `ELEVENLABS_API_KEY`  | `eleven_multilingual_v2` |
+| tts   | lmnt        | `LMNTProvider`          | `LMNT_API_KEY`        | `aurora` (*) |
+| tts   | hume        | `HumeTTSProvider`       | `HUME_API_KEY`        | `octave-2` |
+| music | replicate   | `ReplicateProvider`     | `REPLICATE_API_TOKEN` | `meta/musicgen` |
+| music | gmicloud    | `GMICloudAudioProvider` | `GMI_API_KEY`         | `minimax-music-2.5` |
+
+### Why some providers aren't wired
+
+- **`GMICloudImageProvider`** is edit-only (genfill/seededit/reve-edit) — no
+  text-to-image family, so it can't generate B0/B1 keyframes.
+- **`AssemblyAIProvider`** is speech-TO-text (transcription) — the opposite
+  direction; there's no transcription stage. Future feature hook.
+- **`ElevenLabsSFXProvider`** generates sound effects — the composer has no SFX
+  track. Future feature hook.
+
+### Quirks (data on the `CatalogEntry`)
+
+- **Image handoff** (`image_handoff`): `external_inputs` for every video
+  provider except Decart (legacy `image_kwarg`). See AGENTS Rule 5.
+- **Duration grid** (`snap_durations`): GMICloud Kling renders 5s/10s only;
+  `snap_scene_durations(spec, video_entry)` quantizes to the nearest. Other
+  providers have no grid (no-op).
+- **Instrumental music**: GMICloud MiniMax-Music needs a `lyrics`/
+  `is_instrumental` payload the default family drops; the override is baked
+  into the music entry's `make()` (`_instrumental_music_registry`).
+
+### Untested combinations degrade gracefully
+
+Any vendor×modality combo is selectable, including ones never hand-tested. A
+combo that fails at runtime falls into the existing best-effort degradation:
+a failed video clip → the scene's keyframe still; failed audio → silent/
+dropped, each with a `notice`. Essential stages (chat, image B0/B1) still fail
+loud at `preflight=True` for $0 on a bad key.
 
 ## Preflight
 

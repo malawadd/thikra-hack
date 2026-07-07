@@ -8,7 +8,7 @@ media stream (which re-sends the same seed) accept identical input.
 import pytest
 from pydantic import ValidationError
 
-from app.types.api import _PROMPT_MAX, MediaRequest, PromptRequest
+from app.types.api import _PROMPT_MAX, MediaRequest, PromptRequest, Selection
 
 # A realistic detailed brief (the case that regressed): comfortably over the
 # old 500 cap, comfortably under the new one.
@@ -28,3 +28,24 @@ def test_prompt_bounds_are_enforced(dto) -> None:
         dto(prompt="ab")  # too short
     with pytest.raises(ValidationError):
         dto(prompt="x" * (_PROMPT_MAX + 1))  # over the cap
+
+
+def test_selection_defaults_to_simplest_path() -> None:
+    """Omitting `selection` yields the fewest-keys default (Replicate + OpenAI),
+    with `model=None` meaning 'use the catalog default for that vendor'."""
+    sel = MediaRequest(prompt="seed prompt").selection
+    assert sel == Selection()
+    assert (sel.chat.vendor, sel.image.vendor, sel.video.vendor,
+            sel.tts.vendor, sel.music.vendor) == (
+        "openai", "replicate", "replicate", "openai", "replicate")
+    assert all(c.model is None for c in (sel.chat, sel.image, sel.video, sel.tts, sel.music))
+
+
+def test_selection_accepts_explicit_vendor_and_model() -> None:
+    req = MediaRequest(prompt="seed prompt", selection={
+        "video": {"vendor": "runway", "model": "gen4_turbo"},
+    })
+    assert req.selection.video.vendor == "runway"
+    assert req.selection.video.model == "gen4_turbo"
+    # Unspecified slots still fall back to the simplest-path defaults.
+    assert req.selection.image.vendor == "replicate"

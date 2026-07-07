@@ -1,24 +1,24 @@
-// Friendly labels for the model ids the pipeline can use. Keep this list
-// in sync with services/api/app/config.py defaults. The PipelineInspector
-// renders {label, provider} per step; an unknown model falls back to its
-// raw id.
+// Friendly labels for a few common model ids the inspector renders per step.
+//
+// This is a switchboard: ANY provider/model can drive any modality per run, so
+// a hardcoded model→vendor table can't be authoritative. We keep only stable
+// display niceties here and let `lookupModel` fall back to the raw id +
+// namespace for everything else — never assert a vendor we can't be sure of.
 
 export type ModelInfo = { label: string; provider: string };
 
-const MODELS: Record<string, ModelInfo> = {
-  // OpenAI
-  "gpt-4.1-mini":  { label: "GPT-4.1 mini",  provider: "OpenAI" },
-  "gpt-image-1":   { label: "gpt-image-1",   provider: "OpenAI" },
-  "gpt-image-2":   { label: "gpt-image-2",   provider: "OpenAI" },
-  // Decart
-  "Kling-Image2Video-V2.1-Master": { label: "Kling i2v V2.1", provider: "GMICloud" },
-  // NVIDIA
-  "nvidia/magpie-tts-multilingual": { label: "Magpie TTS", provider: "NVIDIA" },
-  // GMICloud
-  "minimax-music-2.5":  { label: "MiniMax Music 2.5", provider: "GMICloud" },
+// Optional friendly labels. Vendor is intentionally omitted; the fallback
+// derives a namespace hint from the id (e.g. "meta/musicgen" → "meta").
+const MODEL_LABELS: Record<string, string> = {
+  "gpt-image-1": "gpt-image-1",
+  "gpt-image-2": "gpt-image-2",
 };
 
 export function lookupModel(model?: string): ModelInfo {
   if (!model) return { label: "—", provider: "—" };
-  return MODELS[model] ?? { label: model, provider: model.split("/")[0] ?? "—" };
+  const label = MODEL_LABELS[model] ?? model;
+  // A slash-namespaced id (Replicate/HF style) exposes its owner; a bare id
+  // doesn't, so leave the provider blank rather than echoing the model.
+  const provider = model.includes("/") ? model.split("/")[0] : "—";
+  return { label, provider };
 }

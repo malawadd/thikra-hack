@@ -22,8 +22,10 @@
 │  types/         StoryboardSpec + request DTOs only                   │
 │                                                                      │
 │  repo/                                                               │
-│    pipelines.py — ONLY file importing genblaze provider classes      │
-│                   + the standalone `chat()` function for Stage A     │
+│    provider_catalog.py — ONLY file importing genblaze provider       │
+│                   classes; CatalogEntry per (slot, vendor) + quirks  │
+│    pipelines.py — resolves CatalogEntry.make(); imports only         │
+│                   `chat()` (Stage A) + genblaze_core/Pipeline        │
 │    composer.py  — ffmpeg orchestration (genblaze_core types only)    │
 │                                                                      │
 │  tests/                                                              │
@@ -35,9 +37,9 @@
                      ▼                                 │
 ┌──────────────────────────────────────────────────┐   │
 │ genblaze-core + provider packages (PyPI)         │   │
-│   genblaze-core, genblaze-s3,                    │   │
-│   genblaze-openai, genblaze-decart,              │   │
-│   genblaze-nvidia, genblaze-gmicloud             │   │
+│   genblaze-core>=0.3.4, genblaze-s3,             │   │
+│   openai, google, decart, nvidia, gmicloud,      │   │
+│   replicate, runway, luma, elevenlabs, lmnt, hume│   │
 └──────────────┬───────────────────────────────────┘   │
                │                                       │
                ▼                                       ▼
@@ -73,13 +75,12 @@ Stage A Pipeline.
 
 - **Pipeline:** `Pipeline("genblaze-gen-media-multi-provider-sample", max_concurrency=3)`.
   Stands alone — no `from_result()` anchor, because Stage A is not a Pipeline.
-- **Provider:** `ImagenProvider` (Google) — `imagen-4.0-generate-001`
-  default (the Gemini API serves Imagen 4.0; 3.0 is retired);
-  `imagen-4.0-generate-001` / `-ultra-` are the higher-quality upgrade targets.
-  Stage B0 generates one reference image first; B1 fans out one keyframe per
-  scene, prefixing the shared `style_prompt` so the scenes rhyme visually
-  (Imagen is generate-only, so consistency comes from the prompt, not image
-  conditioning).
+- **Provider:** the run's selected image vendor (`selection.image`), resolved
+  from the catalog — default Replicate (`black-forest-labs/flux-schnell`);
+  Google Imagen / DALL·E / NVIDIA / Decart also available. Stage B0 generates
+  one reference image first; B1 fans out one keyframe per scene, prefixing the
+  shared `style_prompt` so the scenes rhyme visually (generate-only providers
+  get consistency from the prompt, not image conditioning).
 - **Output:** one PNG per scene. The Stage B1 Manifest is the lineage
   root for the visual track in B2.
 
@@ -88,13 +89,15 @@ Stage A Pipeline.
 - **Pipeline:** `.from_result(stage_b1).max_concurrency=3`. The
   `from_result()` call records B1's `run_id` as the Stage B2 Manifest's
   `parent_run_id`, preserving B1 → B2 lineage in B2.
-- **Cross-pipeline image handoff:** the keyframe asset URL is presigned
-  via `S3StorageBackend.get_url(...)` and passed as the
-  `image=<presigned-url>` kwarg to `DecartVideoProvider`. This is the
-  canonical 0.3.x pattern; `from_result()` only records lineage in
-  0.3.x — it does NOT hydrate prior assets into provider kwargs.
-- **Per scene:** one `DecartVideoProvider` step + one `NvidiaAudioProvider` step.
-- **Once at the end:** one `GMICloudAudioProvider` step for the music bed.
+- **Cross-pipeline image handoff:** the keyframe asset URL is presigned via
+  `S3StorageBackend.get_url(...)` and handed to the selected video provider per
+  its `image_handoff` — `external_inputs=[Asset(...)]` for almost everyone
+  (Replicate default, Runway, Luma, Kling, Veo, Sora) or the legacy `image=`
+  kwarg for Decart. `from_result()` only records lineage in 0.3.x — it does
+  NOT hydrate prior assets into provider kwargs.
+- **Per scene:** one video step (`selection.video`) + one TTS step
+  (`selection.tts`).
+- **Once at the end:** one music step (`selection.music`) for the bed.
 - **Output (Stage B2 Run):** `(video, narration) × N + (music,)` — the
   composer relies on this ordering when grouping scenes.
 
@@ -149,8 +152,10 @@ redirect path.
 
 ## Ethos constraints
 
-1. **`genblaze_*` imports confined to `app/repo/pipelines.py`** (and
-   `composer.py` for `Asset` / `Manifest` / `Mp4Handler` types). Tested.
+1. **Provider-class imports confined to `app/repo/provider_catalog.py`**
+   (`pipelines.py` imports only `genblaze_openai.chat` + `genblaze_core`;
+   `composer.py` only `Asset`/`Manifest`/`Mp4Handler` types). Tested
+   (`test_genblaze_provider_imports_confined`).
 2. **No `boto3` / `botocore`.** Tested.
 3. **FastAPI handlers return Genblaze models directly** — no DTO wrappers.
 4. **`S3StorageBackend.for_backblaze(...)` called with explicit

@@ -2,32 +2,44 @@
 
 import { AlertTriangle } from "lucide-react";
 import { AlertBanner } from "@/components/ui/alert-banner";
-import { useHealth } from "@/lib/queries";
+import { useHealth, useProviders } from "@/lib/queries";
+import { MODALITIES, vendorLabel, type Modality, type Selection } from "@/lib/api-client";
+
+// Per-modality consequence when the SELECTED vendor's key is missing. Chat +
+// image are essential (the run fails for $0 at preflight); video/tts/music are
+// best-effort (the composer degrades).
+const CONSEQUENCE: Record<Modality, string> = {
+  chat: "the storyboard can't be generated",
+  image: "keyframes can't be generated",
+  video: "clips fall back to the keyframe stills",
+  tts: "scenes will have no narration",
+  music: "the video will have no score",
+};
 
 /**
- * Pre-flight advisory — surfaces missing provider keys / ffmpeg BEFORE a run so
- * the user knows what will degrade (or fail) ahead of spending minutes of paid
- * generation. Advisory only: it never disables the CTA — `/health` is polled
- * on an interval (so it can be ~60s stale), and the backend already fails Stage
- * A cheaply on a missing OpenAI key while B2 falls back gracefully on missing
- * audio/video keys. B2-not-connected is covered by the global `HealthBanner`.
+ * Pre-flight advisory — surfaces missing keys for the CURRENTLY SELECTED
+ * providers (+ ffmpeg) BEFORE a run, so the user knows what will degrade or
+ * fail ahead of spending minutes of paid generation. Advisory only: it never
+ * disables the CTA. B2-not-connected is covered by the global `HealthBanner`.
  */
-export function ReadinessNotice() {
-  const { data } = useHealth();
-  if (!data) return null;
+export function ReadinessNotice({ selection }: { selection: Selection }) {
+  const { data: health } = useHealth();
+  const { data: matrix } = useProviders();
+  if (!health) return null;
 
-  const p = data.providers;
   const issues: string[] = [];
-  if (!p.openai_key_present)
-    issues.push("OpenAI key missing — the storyboard and keyframes can't be generated.");
-  if (!data.ffmpeg_present)
+  // Warn per modality if the chosen vendor isn't configured.
+  if (matrix) {
+    for (const m of MODALITIES) {
+      const vendor = selection[m].vendor;
+      const opt = matrix[m]?.find((o) => o.vendor === vendor);
+      if (opt && !opt.key_available) {
+        issues.push(`${vendorLabel(vendor)} key missing — ${CONSEQUENCE[m]}.`);
+      }
+    }
+  }
+  if (!health.ffmpeg_present)
     issues.push("ffmpeg isn't installed on the API host — the final MP4 can't be composed (source assets are still saved to B2).");
-  if (!p.decart_key_present)
-    issues.push("Decart key missing — video falls back to the keyframe stills.");
-  if (!p.nvidia_key_present)
-    issues.push("NVIDIA key missing — scenes will have no narration.");
-  if (!p.gmi_key_present)
-    issues.push("GMICloud key missing — the video will have no music.");
 
   if (issues.length === 0) return null;
 

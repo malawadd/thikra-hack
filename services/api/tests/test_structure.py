@@ -34,15 +34,22 @@ def test_no_direct_aws_client_imports() -> None:
     assert not offenders, f"Direct boto3/botocore imports found: {offenders}"
 
 
-def test_pipelines_is_the_only_genblaze_provider_consumer() -> None:
-    """`genblaze_openai` / `_decart` / `_nvidia` / `_gmicloud` may import
-    only from `app/repo/pipelines.py`. `composer.py` imports `genblaze_core`
-    types only (Asset, Manifest, Mp4Handler) — never Pipeline/Provider."""
+def test_genblaze_provider_imports_confined() -> None:
+    """Provider CLASS imports live only in `provider_catalog.py` (the catalog is
+    the single provider-import surface) and `pipelines.py` (which imports just
+    `genblaze_openai.chat`, the standalone storyboard function). `composer.py`
+    imports `genblaze_core` types only (Asset/Manifest/Mp4Handler) — never a
+    Pipeline/Provider; core/s3 are storage layers, not in `provider_roots`."""
     provider_roots = {
-        "genblaze_openai", "genblaze_decart", "genblaze_nvidia", "genblaze_gmicloud",
+        "genblaze_openai", "genblaze_google", "genblaze_decart", "genblaze_nvidia",
+        "genblaze_gmicloud", "genblaze_replicate", "genblaze_runway", "genblaze_luma",
+        "genblaze_elevenlabs", "genblaze_lmnt", "genblaze_hume",
     }
     offenders: list[str] = []
-    allowed = {APP_ROOT / "repo" / "pipelines.py"}
+    allowed = {
+        APP_ROOT / "repo" / "provider_catalog.py",
+        APP_ROOT / "repo" / "pipelines.py",
+    }
     for path in _py_files():
         if path in allowed:
             continue
@@ -52,7 +59,7 @@ def test_pipelines_is_the_only_genblaze_provider_consumer() -> None:
                 root = (node.module or "").split(".")[0]
                 if root in provider_roots:
                     offenders.append(f"{path.relative_to(APP_ROOT)}:{node.lineno} imports {node.module}")
-    assert not offenders, f"Provider imports outside pipelines.py: {offenders}"
+    assert not offenders, f"Provider imports outside the catalog/pipelines: {offenders}"
 
 
 def test_blocking_b2_endpoints_are_sync_def() -> None:
@@ -68,6 +75,7 @@ def test_blocking_b2_endpoints_are_sync_def() -> None:
     must_be_sync = {
         "health", "list_run_assets", "list_files", "get_asset",
         "create_storyboard",  # blocking OpenAI chat + B2 put, up front
+        "get_providers",      # trivial dict build — no event loop needed
     }
     tree = ast.parse((APP_ROOT / "main.py").read_text())
     offenders = [
@@ -131,4 +139,18 @@ def test_main_line_budget() -> None:
     # Bumped 480 → 500 for the `inline=1` manifest-proxy branch on
     # `/assets/{key}` (fetch() can't read B2's cross-origin presigned URL)
     # and the duration-snap call in the media stream handler.
-    assert len(lines) < 500, f"main.py is {len(lines)} lines — budget is 500"
+    # Bumped 500 → 580 for the switchboard: GET /providers, the per-modality
+    # selection resolver (`_resolve_choice`), and threading the resolved
+    # provider entries into the three build_* calls + startup/health key dicts.
+    assert len(lines) < 580, f"main.py is {len(lines)} lines — budget is 580"
+
+
+def test_provider_catalog_line_budget() -> None:
+    """`repo/provider_catalog.py` must stay below 400 lines.
+
+    The catalog is intentionally flat DATA (one CatalogEntry per (slot,
+    vendor)). If it outgrows this it's a sign a quirk is becoming a framework
+    — push provider-construction logic into `make()` rather than new fields.
+    """
+    lines = (APP_ROOT / "repo" / "provider_catalog.py").read_text().splitlines()
+    assert len(lines) < 400, f"provider_catalog.py is {len(lines)} lines — budget is 400"

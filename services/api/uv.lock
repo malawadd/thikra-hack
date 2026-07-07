@@ -478,6 +478,44 @@ wheels = [
 ]
 
 [[package]]
+name = "elevenlabs"
+version = "2.54.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/61/8f/063f4288d5e32fb25ed6b01725d5fc19ea2eddc3c4d780ce56acf4bb43e9/elevenlabs-2.54.0.tar.gz", hash = "sha256:9f7c89bf10eb22f8407d961a1fd78fd720a5074a9ad0cd63f5975176812def5f", size = 650826, upload-time = "2026-06-23T14:16:06.533Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/6d/8e69c2dfb30f964c010be2669bb7321a5b0e3bc064a6b2e75049add65a35/elevenlabs-2.54.0-py3-none-any.whl", hash = "sha256:52aac7d14f7a1557634c8549e6ec28bb0ea8ed8c228b39d6be4647a6f4463766", size = 1761450, upload-time = "2026-06-23T14:16:04.477Z" },
+]
+
+[[package]]
+name = "eval-type-backport"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/ea/8b0ac4469d4c347c6a385ff09dc3c048c2d021696664e26c7ee6791631b5/eval_type_backport-0.2.2.tar.gz", hash = "sha256:f0576b4cf01ebb5bd358d02314d31846af5e07678387486e2c798af0e7d849c1", size = 9079, upload-time = "2024-12-21T20:09:46.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/31/55cd413eaccd39125368be33c46de24a1f639f2e12349b0361b4678f3915/eval_type_backport-0.2.2-py3-none-any.whl", hash = "sha256:cb6ad7c393517f476f96d456d0412ea80f0a8cf96f6892834cd9340149111b0a", size = 5830, upload-time = "2024-12-21T20:09:44.175Z" },
+]
+
+[[package]]
+name = "exceptiongroup"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/0e/97c33bf5009bdbac74fd2beace167cab3f978feb69cc36f1ef79360d6c4e/exceptiongroup-1.3.1-py3-none-any.whl", hash = "sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598", size = 16740, upload-time = "2025-11-21T23:01:53.443Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.136.3"
 source = { registry = "https://pypi.org/simple" }
@@ -600,28 +638,42 @@ wheels = [
 
 [[package]]
 name = "genblaze-core"
-version = "0.3.2"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pillow" },
     { name = "pydantic" },
+    { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/65/9be769da31fcba42b9cb5300904762059a34a67a1ce3209ceca19ffc486f/genblaze_core-0.3.2.tar.gz", hash = "sha256:56fb37f2f30fb3f911d3537abed0222e6e0b77413dbddebc13a758df73b7f5fa", size = 335844, upload-time = "2026-05-26T17:14:48.019Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/43/e6e012f1660c98fa25a630284b980b9fecdf71ec33401ad9bcbf9f970f86/genblaze_core-0.3.4.tar.gz", hash = "sha256:fb2be7ccdfaf9dad60954b8878f0a516221dce3b73c9e6d068a5ddee9ab42673", size = 384287, upload-time = "2026-06-25T17:52:51.201Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/45/68436854232b63f0dda5a7267b8cb6993acae3846de3cd86175e9aca61a0/genblaze_core-0.3.2-py3-none-any.whl", hash = "sha256:08827906115caa681bb5ecf7a43e8fc30353eda8f031c00d9f3afcb272d45679", size = 238310, upload-time = "2026-05-26T17:14:46.623Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/3c/67a9b9051b819e7e0c23f0f70dac9a16af39a8f9ec06f88fa4b36fe3c6a9/genblaze_core-0.3.4-py3-none-any.whl", hash = "sha256:7b71fce2c9a7dbb135f37019b7e19c4bafa0441c551ddffced067118b7b03bc4", size = 258710, upload-time = "2026-06-25T17:52:49.65Z" },
 ]
 
 [[package]]
 name = "genblaze-decart"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "decart" },
     { name = "genblaze-core" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/e6/74cfd53a93a93c673b33c667311741d7ac6a4b3bf1ed4d4f5fcba2082c1f/genblaze_decart-0.3.0.tar.gz", hash = "sha256:9e3599b42302b557a85324e1e5140d5d55d627ff11f633a70efc880bb13b7a7b", size = 10087, upload-time = "2026-05-20T16:55:39.885Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/07/a5b1da194abf95bc879b66ef96fde170d54703a26519efb80ceb1863dbe7/genblaze_decart-0.3.1.tar.gz", hash = "sha256:332784039408b94b24a4226cdae6a28348f9510da6c4ab5ee21e23b4986bd350", size = 10187, upload-time = "2026-06-25T17:53:37.936Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/47/df/b27a095e01c1e2036f40fa76463e5823f0ac4c8f9977e8f4dec114018ed1/genblaze_decart-0.3.0-py3-none-any.whl", hash = "sha256:55065922e78b3b83081f4e90fc25955aa607555a84e8fc0f3d3084b212d7d697", size = 10502, upload-time = "2026-05-20T16:55:38.004Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/c3/05f240f331762b6294e1170f8eef752c50c9dc78aa2b3751368551e80435/genblaze_decart-0.3.1-py3-none-any.whl", hash = "sha256:5bf9bca0f636197189a9763f7a7addfe0bad0ae7aaea030f3c18e434c105bca2", size = 10502, upload-time = "2026-06-25T17:53:36.468Z" },
+]
+
+[[package]]
+name = "genblaze-elevenlabs"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "elevenlabs" },
+    { name = "genblaze-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7a/0f/b01c5e60ba59f44e2021a64fd2d7b9cd55e4d85fe8a671dcb2ce6a6b5370/genblaze_elevenlabs-0.3.1.tar.gz", hash = "sha256:83ff5753d24db39f2ee015cd2a740e5a574b917b98f92034c943bfe6a92e0726", size = 11824, upload-time = "2026-06-25T17:53:30.723Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/80/6867296a42ec228e298acefb3197beda88d527c96fd51f5b88ee89916ca1/genblaze_elevenlabs-0.3.1-py3-none-any.whl", hash = "sha256:1d28f1b1a3b0db4f044c2b77685dc0e7c70d9306bc545dac9e699709653b361e", size = 12238, upload-time = "2026-06-25T17:53:29.683Z" },
 ]
 
 [[package]]
@@ -632,10 +684,16 @@ dependencies = [
     { name = "fastapi" },
     { name = "genblaze-core" },
     { name = "genblaze-decart" },
+    { name = "genblaze-elevenlabs" },
     { name = "genblaze-gmicloud" },
     { name = "genblaze-google" },
+    { name = "genblaze-hume" },
+    { name = "genblaze-lmnt" },
+    { name = "genblaze-luma" },
     { name = "genblaze-nvidia" },
     { name = "genblaze-openai" },
+    { name = "genblaze-replicate" },
+    { name = "genblaze-runway" },
     { name = "genblaze-s3" },
     { name = "httpx" },
     { name = "pydantic-settings" },
@@ -654,13 +712,19 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "genblaze-core", specifier = ">=0.3.2,<0.4" },
-    { name = "genblaze-decart", specifier = ">=0.3.0,<0.4" },
-    { name = "genblaze-gmicloud", specifier = ">=0.3.1,<0.4" },
-    { name = "genblaze-google", specifier = ">=0.3.0,<0.4" },
-    { name = "genblaze-nvidia", specifier = ">=0.3.0,<0.4" },
-    { name = "genblaze-openai", specifier = ">=0.3.0,<0.4" },
-    { name = "genblaze-s3", specifier = ">=0.3.2,<0.4" },
+    { name = "genblaze-core", specifier = ">=0.3.4,<0.4" },
+    { name = "genblaze-decart", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-elevenlabs", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-gmicloud", specifier = ">=0.3.2,<0.4" },
+    { name = "genblaze-google", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-hume", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-lmnt", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-luma", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-nvidia", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-openai", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-replicate", specifier = ">=0.3.2,<0.4" },
+    { name = "genblaze-runway", specifier = ">=0.3.1,<0.4" },
+    { name = "genblaze-s3", specifier = ">=0.3.4,<0.4" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -677,67 +741,134 @@ dev = [
 
 [[package]]
 name = "genblaze-gmicloud"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genblaze-core" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/01/19/ef553925184907ef5df99685e7be3f8c63e68a916917bef1a813b7d8cd0e/genblaze_gmicloud-0.3.2.tar.gz", hash = "sha256:1b9e38870af2cccd218a68dab5938cd94114b958dd160e5d50fc2aa9652c2e44", size = 38921, upload-time = "2026-06-25T17:53:33.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/68/f73783d2c9ef3a8056d51200df7f988f5d1b9eb797f7776bda81719d37a9/genblaze_gmicloud-0.3.2-py3-none-any.whl", hash = "sha256:c977c5412de53c704be8182debfbfad04138248289571c90a8781135c9672e31", size = 32280, upload-time = "2026-06-25T17:53:32.634Z" },
+]
+
+[[package]]
+name = "genblaze-google"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genblaze-core" },
+    { name = "google-genai" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/fb/b4da62f1bdbaf595f5fda4f26561a328f0f4d1f69f5eafbd8eef3be5ab5c/genblaze_google-0.3.1.tar.gz", hash = "sha256:ef01755da0146c12ac6747b7de9326bd2add717c369cb7fbe6fe1d9c539848c6", size = 20515, upload-time = "2026-06-25T17:53:36.358Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/fc/4904ed280b69d0b811f180694ed7e2ef38e4be4afbb2c63372632949fa37/genblaze_google-0.3.1-py3-none-any.whl", hash = "sha256:38ae5cece836f92b54508bca59470e799c3c4fc3e30b852a8f9267efa69440d5", size = 18666, upload-time = "2026-06-25T17:53:35.208Z" },
+]
+
+[[package]]
+name = "genblaze-hume"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genblaze-core" },
+    { name = "hume" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d5/de/c4e2f8fd3a790535d1d459ce5672df96b8f2a6829871940840784d69ea99/genblaze_hume-0.3.1.tar.gz", hash = "sha256:81f9cec21e2f6a90a55701a18b66b07ba23322a58052fa3e6cbf7887c827e604", size = 10578, upload-time = "2026-06-25T18:13:14.686Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/90/4ea9682744dd99fb27c192f5c7a34a84c2348b3c3fdee8b17d26152ea0a9/genblaze_hume-0.3.1-py3-none-any.whl", hash = "sha256:154944b77eda1acb2f3a6a8bc914867433cb58b9145e8d24ae273f3a817eb5bf", size = 8637, upload-time = "2026-06-25T18:13:13.588Z" },
+]
+
+[[package]]
+name = "genblaze-lmnt"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genblaze-core" },
+    { name = "lmnt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fd/09/461071582fac3a747a5ba8d092480c45e913216f33797344af65984ab659/genblaze_lmnt-0.3.1.tar.gz", hash = "sha256:8dcd73ffbacc5f87dc0fa0d3139a814b916df3d5ce487b6e50ff574f86123e6d", size = 9409, upload-time = "2026-06-25T17:53:37.071Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/46/ae5790afd1c5c510ab29dacbbda0b3d8fd113e301e7ba9aa368d322e6cd2/genblaze_lmnt-0.3.1-py3-none-any.whl", hash = "sha256:9ded88a7db40c6833b6b52b23cb8c0d2a3b47f62f719a83ac79336d43991743b", size = 7606, upload-time = "2026-06-25T17:53:36.034Z" },
+]
+
+[[package]]
+name = "genblaze-luma"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genblaze-core" },
+    { name = "lumaai" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/93/87/87f10ef91f245a040f8df946ac00b05fc376b7f3f8120d82932b928ea021/genblaze_luma-0.3.1.tar.gz", hash = "sha256:2beb2e4bad25d51cd1ba34eb46f434ebd607ee6a3f30e25d796307925cd08fa6", size = 9602, upload-time = "2026-06-25T17:53:45.659Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3a/64/b7dad92212a53c6256532773727d70fbb64a17eec7c1da0a63fb3a6a5714/genblaze_luma-0.3.1-py3-none-any.whl", hash = "sha256:2c0eed23773f3b018630996d2739f416bfa61a2b440075067659543c08a3b7d6", size = 8009, upload-time = "2026-06-25T17:53:44.462Z" },
+]
+
+[[package]]
+name = "genblaze-nvidia"
 version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "genblaze-core" },
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/94/05/65ddee41d24ea39c3d5deb851855c70df58115d2c08112bc43f0b678a974/genblaze_gmicloud-0.3.1.tar.gz", hash = "sha256:37509805b89933a474a81526d0e3d677d132c8ca5ec777ff4735ce6b5cd9fd46", size = 38778, upload-time = "2026-05-26T17:15:18.053Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/c9/731998e78b7b8ed56edf6f16ef7918fb54011d2c880243e488ae33ac7d29/genblaze_nvidia-0.3.1.tar.gz", hash = "sha256:a1990436ce92a80a5dbbbc2f6799fb057b4aeea392d3140d38a743f03cacd4e5", size = 39238, upload-time = "2026-06-25T17:53:38.206Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/4b/dc610bf7114024a8421a51de8a65f023ec51c18b0546c993b1daeece178c/genblaze_gmicloud-0.3.1-py3-none-any.whl", hash = "sha256:983028bfb9bd648c3a9dd70dac69ad34aa2beb91bbeb09ba9c8fecb3c41df8c5", size = 32279, upload-time = "2026-05-26T17:15:16.578Z" },
-]
-
-[[package]]
-name = "genblaze-google"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "genblaze-core" },
-    { name = "google-genai" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/32/319b67fa9fa058a8b88f19f22518df72d346eb1245392e1410f66ea9b81c/genblaze_google-0.3.0.tar.gz", hash = "sha256:154a9ce0000ee61c34370aa95a52436443b787a66d7f5b8dcdb34d0d3dc020f1", size = 20941, upload-time = "2026-05-20T16:55:37.701Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/39/bf576179fd8052584a3a853ee73cb1fd26b5683f4b5baf3497e5085a80bd/genblaze_google-0.3.0-py3-none-any.whl", hash = "sha256:d0a033634985bd379d05a340dcc70461b06b45f6e247de540d8935d5f071cef3", size = 19165, upload-time = "2026-05-20T16:55:36.411Z" },
-]
-
-[[package]]
-name = "genblaze-nvidia"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "genblaze-core" },
-    { name = "httpx" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/1a/29faf75de625e606d369d869ac03aeb5fb87fb394060ae5d9ed98cb31791/genblaze_nvidia-0.3.0.tar.gz", hash = "sha256:7f60a08573a58aaff1dc119d777f12317c33d878042c7000eeb95cce7150f461", size = 39140, upload-time = "2026-05-20T16:55:45.436Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/f9/cabf2322d2c0d87708bffebd582947e138d8489f00179ca72409743a79e2/genblaze_nvidia-0.3.0-py3-none-any.whl", hash = "sha256:98c59abc794ff2a24e289a6a296297b1ea825b20f62a4844a7bdf688fb80fd15", size = 37475, upload-time = "2026-05-20T16:55:43.731Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/5a/69c3e590d13df16bbd9953635d6625f62f075df5bd682773b30b5f18f5da/genblaze_nvidia-0.3.1-py3-none-any.whl", hash = "sha256:4e182a9ee19848ba8ee31f0e7b6fbf292473f277dd23e7bda13e1343fac4eb22", size = 37475, upload-time = "2026-06-25T17:53:36.785Z" },
 ]
 
 [[package]]
 name = "genblaze-openai"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "genblaze-core" },
     { name = "openai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/01/f4789c07a640f6273889526c6e3380b3922fbaf8c3a5b152cabbec466816/genblaze_openai-0.3.0.tar.gz", hash = "sha256:295805fa127ed48a1d33b3c84c33eb06aca582f729fbc44840dd098b0582fd49", size = 26975, upload-time = "2026-05-20T16:55:43.072Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/21/0d/be48578a2feb9e717a903d5acd8940b6bc8b5b90efab89cd504286d1051a/genblaze_openai-0.3.1.tar.gz", hash = "sha256:aa6062fa5b4b5cf2c2671a23df7979abcc950e8a54ebf5f10b55e6e544569750", size = 28746, upload-time = "2026-06-25T17:53:31.419Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/09/c8/aec29b08827c76ccca2f34e03c93ce4c33542d20ebd0db10ea6ceb1a45d1/genblaze_openai-0.3.0-py3-none-any.whl", hash = "sha256:76924dcbd568d70082022112a540f9efbd73cce3c295283902561b5580f36424", size = 23961, upload-time = "2026-05-20T16:55:41.888Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/16/ccea4f89f3db64307080f1c492802da2e1cbfa25f6f75704cf047f8f465f/genblaze_openai-0.3.1-py3-none-any.whl", hash = "sha256:fc105fb23f2ed4413c71426ffdc626dcb71266873f8f502e3b3ffaa8d57097b9", size = 24084, upload-time = "2026-06-25T17:53:30.19Z" },
+]
+
+[[package]]
+name = "genblaze-replicate"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genblaze-core" },
+    { name = "httpx" },
+    { name = "replicate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/04/7c/128911e98fdd9fea2cbbe2b70f4fb4f68fbeb5df87f3895448c4c9e43252/genblaze_replicate-0.3.2.tar.gz", hash = "sha256:a0e2f113691ea91695ce951e918bd7bc5d2be5c21e58fd9935876f85d2728890", size = 13519, upload-time = "2026-06-25T17:53:44.336Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/48/c19345f4362eaceb753d5fc4091ab34113ebab9728e7d609e0e79b37433b/genblaze_replicate-0.3.2-py3-none-any.whl", hash = "sha256:42c51244c3ee37ec18faa51ca92004ee8f10e0f4447ae98dcafb5a8ac0eee7c9", size = 10188, upload-time = "2026-06-25T17:53:43.254Z" },
+]
+
+[[package]]
+name = "genblaze-runway"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genblaze-core" },
+    { name = "runwayml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/db/98/b260c3512f413dc3a871633680d446265d29d7fa89cd65b30fdff8bd6f3d/genblaze_runway-0.3.1.tar.gz", hash = "sha256:e4ec218d492922b8c5827bba0814039c2d02a92356bb4ccf7cf1aaf94558253c", size = 11018, upload-time = "2026-06-25T17:53:28.108Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/20/1b59f023bd2ea6b69536eb15220ac12b4cbd3e562b2f4764f7d560760b05/genblaze_runway-0.3.1-py3-none-any.whl", hash = "sha256:7c84b2e202a8a60099c0110e36ce448fb0e5f290abdd4ca653ca3c23645a0c07", size = 8905, upload-time = "2026-06-25T17:53:27.12Z" },
 ]
 
 [[package]]
 name = "genblaze-s3"
-version = "0.3.2"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
+    { name = "botocore" },
     { name = "genblaze-core" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4c/68/31a6c0a42dcf3b50abd9a65df55893bd192a04de8ce0781ba5db49abab13/genblaze_s3-0.3.2.tar.gz", hash = "sha256:a5bb7d4ccd2c803eaf915b690423cdafb699432070806a21122e4b8ce19c92bd", size = 74002, upload-time = "2026-05-26T17:15:22.379Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/b0/e2cde56a396ee1d5a1a01e4388e20b25dffaaeb4df87afac74be9d9b6109/genblaze_s3-0.3.4.tar.gz", hash = "sha256:440fe4ae0d190f8334c21ba88fab502d41ddc764cf1cba6bdc94d676f7e9338d", size = 75288, upload-time = "2026-06-25T17:53:29.188Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/fc/1d46456022edb4b6ea2de1ca987427ac0cd1ab0f68463fd9b81786d9ef28/genblaze_s3-0.3.2-py3-none-any.whl", hash = "sha256:c40c39f1e03190b986ce343215b84942707a7251e6fc678d812852b6fa390109", size = 42949, upload-time = "2026-05-26T17:15:20.909Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/28/6ac0a1ec4d123ff60d1bbf36496351b25ee48ad11bb605b68b01cec8559e/genblaze_s3-0.3.4-py3-none-any.whl", hash = "sha256:54d6fa8399bec66d2d7a277bdd89dcc768b970c74787462d5e3e76d35177271c", size = 43434, upload-time = "2026-06-25T17:53:27.83Z" },
 ]
 
 [[package]]
@@ -860,6 +991,24 @@ wheels = [
 ]
 
 [[package]]
+name = "hume"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "eval-type-backport" },
+    { name = "exceptiongroup" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/03/9aa60d9dedd84ef40093e0be38936c5edad4348760e890cdc92323e8a1b7/hume-0.14.0.tar.gz", hash = "sha256:f7ca4b3501a8a5367fa8265ea039fa44cc62ba2591c0c52219c617b956517458", size = 122979, upload-time = "2026-06-17T16:46:53.522Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/c8/afb578da12bffc0b36f57fde96ace5f7119ac8d06e8c6e9ce78bfb9aee1f/hume-0.14.0-py3-none-any.whl", hash = "sha256:6a8043f85f9c0c612c33e9548715436cdc42dabb6234515068a6ac1aff05f98e", size = 243093, upload-time = "2026-06-17T16:46:52.133Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.17"
 source = { registry = "https://pypi.org/simple" }
@@ -974,6 +1123,41 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
+]
+
+[[package]]
+name = "lmnt"
+version = "2.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/9f/faa65fc9b7b50bfc58bda3a84484270788a506d7241fa56a108d67b39725/lmnt-2.13.0.tar.gz", hash = "sha256:21c050281d10803fe5a63e9487304e9921baf81db5ec5f226ba51f7dd02289aa", size = 204752, upload-time = "2026-06-04T02:02:44.609Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/f8/b920f95e2168ff200d916272ade5941f5ebd7511c7c7b144880589e7f3a0/lmnt-2.13.0-py3-none-any.whl", hash = "sha256:2fa2f7019a5e229e1712c0bcb54f23dce81bfb46d29dcf2fc832966b642d0bc4", size = 90905, upload-time = "2026-06-04T02:02:43.223Z" },
+]
+
+[[package]]
+name = "lumaai"
+version = "1.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/1d/b6e9f14739aa6b05f6f98869d98c84bc732182d31df285702997d4fff8f0/lumaai-1.21.0.tar.gz", hash = "sha256:b1c1da37fd0581b9684032e7b143dd2ea30f8e4a8e2498fef2fa2242a24d5702", size = 124414, upload-time = "2026-04-07T19:12:36.788Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c5/08/b6fce7131ec0f546de783ad6ec54eb9e1051371a2587a91e543b11545793/lumaai-1.21.0-py3-none-any.whl", hash = "sha256:dd721ea6c5cbb994ffd475caf21c01897c086089eb60d2438b284cf9036160cf", size = 97335, upload-time = "2026-04-07T19:12:35.486Z" },
 ]
 
 [[package]]
@@ -1710,6 +1894,21 @@ wheels = [
 ]
 
 [[package]]
+name = "replicate"
+version = "1.0.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "packaging" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4b/fd/caf6c59a6b8007366bd52ab5a320bf8d828f3860a60039309cfc0e375ec9/replicate-1.0.7.tar.gz", hash = "sha256:d88cb2c37ba39fb370c87fc3291601c67aae64bb918a20a85b5ce399c23ee84c", size = 62226, upload-time = "2025-05-27T11:29:08.111Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c2/5a/b3aa02a11a33de08e7771579154af3193decfb9d923b30b14c17b4e8bbce/replicate-1.0.7-py3-none-any.whl", hash = "sha256:667c50a9eb83be17de6278ff89483102b3b50f49a2c7fbcaa2e2b14df13816f9", size = 48626, upload-time = "2025-05-27T11:29:06.801Z" },
+]
+
+[[package]]
 name = "requests"
 version = "2.34.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1747,6 +1946,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b1/c0/1003b60edd697c649faf61f1a34094b1abb38fb3d1181e3f895781250a08/ruff-0.15.15-py3-none-win32.whl", hash = "sha256:29428ea79694afbe756d45fd59b36f22b6b020dc0443cf7de0173046236964b9", size = 10716774, upload-time = "2026-05-28T14:16:52.337Z" },
     { url = "https://files.pythonhosted.org/packages/02/a8/1269eddd6945a06c23f055ef7848886e37cf9d6a8bebb386a3115f01470c/ruff-0.15.15-py3-none-win_amd64.whl", hash = "sha256:8df0323902e15e24bc4bf246da830573d3cf3352bd0b9a164eab335d111ff4a4", size = 11868463, upload-time = "2026-05-28T14:16:11.333Z" },
     { url = "https://files.pythonhosted.org/packages/4e/b2/920464c907b191e37469d477a1aa8bc048b8f36c4c1610dfa4ab87b39e18/ruff-0.15.15-py3-none-win_arm64.whl", hash = "sha256:3c8ceca6792f38196b8f589bc92eccd03eef286602da92e5dc05cc42ef6441b7", size = 11138498, upload-time = "2026-05-28T14:16:38.425Z" },
+]
+
+[[package]]
+name = "runwayml"
+version = "5.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b6/c2/b1cac4a2f415b0eed83b0a448becbcad121c2ebe944e7cdb97cad87810b9/runwayml-5.2.0.tar.gz", hash = "sha256:b0d96676b07a07b6ef50169e5e8782843c56997e19034eb997868ce46e57dde3", size = 294975, upload-time = "2026-06-17T19:22:51.728Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8c/dd/70cc05bc5a5e07aca6537d379a638fdcfa17ce5d4841b839a1b18df7b1ae/runwayml-5.2.0-py3-none-any.whl", hash = "sha256:88ea46d6f0fa2aea65d89a54abe7bee100fea552237b757c1af2f3dd4090c9fb", size = 208111, upload-time = "2026-06-17T19:22:50.485Z" },
 ]
 
 [[package]]

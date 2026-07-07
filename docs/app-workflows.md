@@ -28,18 +28,18 @@ User                Web (Next.js)              FastAPI                Genblaze +
  │                       │                        │  else generate_storyboard) │                        │
  │                       │                        ├── build_keyframe_pipeline  │                        │
  │                       │                        │   .stream()                │                        │
- │                       │                        ├───────────────────────────►│ ImagenProvider × N     │
+ │                       │                        ├───────────────────────────►│ image provider × N     │
  │                       │                        │                            ├── PNG_i → B2 ─────────►│
  │                       │◄─ SSE: stream events ──┤                            │                        │
  │                       │                        │◄── PipelineCompletedEvent  │                        │
  │                       │                        │   (result = b1_result)     │                        │
  │                       │                        ├── build_media_pipeline     │                        │
  │                       │                        │   .from_result(B1)         │                        │
- │                       │                        │   image=presign(B1.png)    │                        │
+ │                       │                        │   handoff=presign(B1.png)  │                        │
  │                       │                        │   .stream()                │                        │
- │                       │                        ├───────────────────────────►│ DecartVideoProvider × N│
- │                       │                        │                            │ NvidiaAudioProvider × N│
- │                       │                        │                            │ GMICloudAudio × 1      │
+ │                       │                        ├───────────────────────────►│ video provider × N     │
+ │                       │                        │                            │ TTS provider × N       │
+ │                       │                        │                            │ music provider × 1     │
  │                       │                        │                            ├── MP4/WAV/WAV → B2 ───►│
  │                       │◄─ SSE: stream events ──┤                            │                        │
  │                       │                        │◄── PipelineCompletedEvent  │                        │
@@ -53,6 +53,16 @@ User                Web (Next.js)              FastAPI                Genblaze +
  │  final video + asset  │                        │                            │                        │
  │  list shown           │                        │                            │                        │
 ```
+
+### Surviving a reload
+
+Studio run state lives client-side (`StudioPage`), so it's snapshotted to
+`sessionStorage` (`lib/run-store.ts`) and restored on mount. A reload of a
+completed or awaiting-approval run brings the canvas back intact. Because media
+generation streams from a single request, a reload *mid-stream* can't resume the
+stream — the restore flips the run to an "Interrupted" error with a retry, and
+any steps that finished are already durable in B2 (see Lineage below). A
+`beforeunload` guard warns before a reload discards an in-flight, paid run.
 
 ## Lineage in B2
 
@@ -78,8 +88,10 @@ Manifest but does NOT hydrate prior assets into provider kwargs. So
 Stage B2 reaches into `keyframe_result.run.steps[i].assets[0]` and
 presigns the durable B2 URL via
 `S3StorageBackend.get_url(key, expires_in=900)` (the `presign_asset_url`
-helper in `pipelines.py`). The presigned URL is then passed as
-`image=<url>` to `DecartVideoProvider`.
+helper in `pipelines.py`). The presigned URL is then handed to the selected
+video provider per its `image_handoff`: `external_inputs=[Asset(...)]` for
+almost every provider (Replicate, Runway, Luma, Kling, Veo, Sora) or the
+legacy `image=<url>` kwarg for Decart. See AGENTS Rule 5.
 
-This pattern matches `genblaze-gmicloud-pipeline.build_video_fanout` —
-the canonical 0.3.x shape for cross-pipeline asset handoffs.
+The `external_inputs` shape matches `genblaze-gmicloud-pipeline.build_video_fanout` —
+the canonical 0.3.x pattern for cross-pipeline asset handoffs.

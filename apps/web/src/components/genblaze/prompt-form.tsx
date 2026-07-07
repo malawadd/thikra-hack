@@ -26,12 +26,16 @@ export function PromptForm({
 }) {
   const [value, setValue] = useState("");
 
+  const submit = () => {
+    if (value.trim()) onSubmit(value.trim());
+  };
+
   return (
     <form
       className="space-y-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (value.trim()) onSubmit(value.trim());
+        submit();
       }}
     >
       <div className="space-y-2">
@@ -40,6 +44,14 @@ export function PromptForm({
           id="prompt"
           value={value}
           onChange={(e) => setValue(e.target.value.slice(0, PROMPT_MAX))}
+          // Enter alone inserts a newline (multi-line briefs); Cmd/Ctrl+Enter
+          // submits, matching the convention for prompt textareas.
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              if (!disabled) submit();
+            }
+          }}
           placeholder="How large language models predict the next token, for a new product manager"
           rows={3}
           maxLength={PROMPT_MAX}
@@ -66,7 +78,11 @@ export function PromptForm({
           </button>
         ))}
       </div>
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-muted-foreground">
+          <kbd className="font-mono">⌘</kbd>/<kbd className="font-mono">Ctrl</kbd>
+          {" "}+ <kbd className="font-mono">↵</kbd> to generate
+        </span>
         <Button type="submit" disabled={disabled || !value.trim()}>
           {disabled ? "Generating…" : "Generate explainer"}
         </Button>

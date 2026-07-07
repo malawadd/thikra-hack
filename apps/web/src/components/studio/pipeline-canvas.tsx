@@ -40,16 +40,26 @@ import {
 } from "@/components/ui/dialog";
 import { PromptForm } from "@/components/genblaze/prompt-form";
 import { cn } from "@/lib/utils";
-import { playbackUrl } from "@/lib/api-client";
-import type { Asset } from "@/types/pipeline";
+import {
+  playbackUrl,
+  resolveModel,
+  vendorLabel,
+  type Modality,
+  type ProvidersMatrix,
+  type Selection,
+} from "@/lib/api-client";
+import type { Asset, SceneSlots } from "@/types/pipeline";
 import type { Scene, StoryboardSpec } from "@/types/storyboard";
-import type { SceneSlots } from "@/components/genblaze/scene-strip";
 
 export type CanvasPhase =
   | "idle" | "planning" | "refining" | "generating" | "done" | "error";
 
 interface PipelineCanvasProps {
   phase: CanvasPhase;
+  /** Live per-modality provider selection — drives each tile's model/provider. */
+  selection: Selection;
+  /** Provider catalog (may be undefined while `GET /providers` is in flight). */
+  matrix: ProvidersMatrix | undefined;
   seed: string;
   spec: StoryboardSpec | null;
   setSpec: (s: StoryboardSpec) => void;
@@ -66,24 +76,39 @@ interface PipelineCanvasProps {
   onStartMedia: () => void;
 }
 
-// Centralised "what runs where" — the source-of-truth metadata strip
-// that every tile renders under its content. Mirrors services/api/app/
-// repo/pipelines.py's stage layout.
-const META = {
-  seed:    { model: "—",                            provider: "—" },
-  script:  { model: "gpt-4.1-nano",                 provider: "OpenAI chat() · response_format" },
-  ref:     { model: "imagen-4.0-generate-001", provider: "Google · ImagenProvider" },
-  scenes:  { model: "imagen-4.0-generate-001", provider: "Google · ImagenProvider" },
-  video:   { model: "Kling-Image2Video-V2.1-Master", provider: "GMICloud · GMICloudVideoProvider" },
-  tts:     { model: "nvidia/magpie-tts-multilingual", provider: "NVIDIA · NvidiaAudioProvider" },
-  music:   { model: "minimax-music-2.5",            provider: "GMICloud · GMICloudAudioProvider" },
-  compose: { model: "ffmpeg",                       provider: "local subprocess (composer.py)" },
-} as const;
+// Model + provider shown under a tile's header. Derived per-run from the live
+// provider selection (see `deriveMeta`) so the canvas always reflects what's
+// actually running, never a hardcoded default.
+type TileMeta = { model: string; provider: string };
+
+// Static metadata for the two stages that never vary with the switchboard:
+// the seed prompt (no model) and Stage C composition (always local ffmpeg).
+const SEED_META: TileMeta = { model: "—", provider: "—" };
+const COMPOSE_META: TileMeta = { model: "ffmpeg", provider: "local subprocess (composer.py)" };
+
+// Resolve the dynamic per-tile metadata from the current selection + catalog.
+// `chat` drives the Script tile (rendered as a `chat()` call, not a Pipeline
+// step); `image` drives both the reference and per-scene keyframe tiles.
+function deriveMeta(selection: Selection, matrix: ProvidersMatrix | undefined) {
+  const model = (m: Modality) => resolveModel(selection, matrix, m);
+  const provider = (m: Modality) => vendorLabel(selection[m].vendor);
+  return {
+    script: { model: model("chat"),  provider: `${provider("chat")} · chat()` },
+    image:  { model: model("image"), provider: provider("image") },
+    video:  { model: model("video"), provider: provider("video") },
+    tts:    { model: model("tts"),   provider: provider("tts") },
+    music:  { model: model("music"), provider: provider("music") },
+  };
+}
 
 type TileKey = "seed" | "script" | "storyboard" | "media" | "composition";
 
 export function PipelineCanvas(p: PipelineCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Per-tile model/provider derived from the live selection — recomputed when
+  // the user changes a provider so every tile stays truthful about the run.
+  const meta = deriveMeta(p.selection, p.matrix);
 
   // Visibility ladder — each tile lights up when the upstream stage
   // delivers its first signal.
@@ -232,9 +257,10 @@ export function PipelineCanvas(p: PipelineCanvasProps) {
               generating={p.generating}
               onStartMedia={p.onStartMedia}
               setSpec={p.setSpec}
+              meta={meta.script}
             />
           ) : (
-            <ScriptPlaceholderTile />
+            <ScriptPlaceholderTile meta={meta.script} />
           )
         )}
         {showStoryboard && <Arrow active={p.phase === "generating" && !allKeyframesReady} />}
@@ -242,6 +268,7 @@ export function PipelineCanvas(p: PipelineCanvasProps) {
           spec={p.spec!}
           referenceUrl={p.referenceUrl}
           slots={p.slots}
+          meta={meta.image}
         />}
         {showMedia && <Arrow active={p.phase === "generating"} />}
         {showMedia && <MediaTile
@@ -250,6 +277,7 @@ export function PipelineCanvas(p: PipelineCanvasProps) {
           musicUrl={p.musicUrl}
           musicFailed={p.musicFailed}
           done={p.phase === "done"}
+          meta={{ video: meta.video, tts: meta.tts, music: meta.music }}
         />}
         {showComp && <Arrow />}
         {showComp && <CompositionTile asset={p.finalAsset!} runId={p.runId} manifestUri={p.manifestUri} />}
@@ -292,9 +320,10 @@ function TileShell({
       : width === "wide"
         ? "w-[360px]"
         : "w-[300px]";
-  // Provider string in META is "Vendor · ClassName" (e.g. "OpenAI · DalleProvider").
-  // Take just the vendor for the compact header chip; the full string lives
-  // in the title attribute (hover tooltip) so it's still discoverable.
+  // The provider string is either a bare vendor ("Replicate") or
+  // "Vendor · surface" (e.g. "OpenAI · chat()"). Take the leading vendor for
+  // the compact header chip; the full string lives in the title attribute
+  // (hover tooltip) so the surface stays discoverable.
   const providerShort = meta?.provider.split(" · ")[0];
   const Outer = (as === "div" ? "div" : "li") as React.ElementType;
   return (
@@ -361,7 +390,7 @@ function Arrow({ active = false }: { active?: boolean }) {
 // arrived yet. Keeps the canvas balanced (script slot is always there
 // the instant the user clicks Generate) and gives the user a clear
 // "yes, something is happening" signal.
-function ScriptPlaceholderTile() {
+function ScriptPlaceholderTile({ meta }: { meta: TileMeta }) {
   return (
     <TileShell
       title="Script"
@@ -369,7 +398,7 @@ function ScriptPlaceholderTile() {
       status="active"
       width="wide"
       tileKey="script"
-      meta={META.script}
+      meta={meta}
       badge={<StatusPill tone="active" dot>planning</StatusPill>}
     >
       <div className="flex h-full min-h-[260px] items-center justify-center py-8">
@@ -400,7 +429,7 @@ function SeedTile({ p }: { p: PipelineCanvasProps }) {
         width="wide"
         tileKey="seed"
         badge={<StatusPill tone="amber">awaiting input</StatusPill>}
-        meta={META.seed}
+        meta={SEED_META}
       >
         <PromptForm onSubmit={p.onSubmit} disabled={p.generating} />
       </TileShell>
@@ -414,7 +443,7 @@ function SeedTile({ p }: { p: PipelineCanvasProps }) {
       width="narrow"
       tileKey="seed"
       badge={<StatusPill tone="green">submitted</StatusPill>}
-      meta={META.seed}
+      meta={SEED_META}
     >
       <p className="text-sm font-medium leading-snug line-clamp-4">{p.seed}</p>
       <button
@@ -442,13 +471,14 @@ function SeedTile({ p }: { p: PipelineCanvasProps }) {
 //     the CTA.
 
 function ScriptTile({
-  spec, phase, generating, onStartMedia, setSpec,
+  spec, phase, generating, onStartMedia, setSpec, meta,
 }: {
   spec: StoryboardSpec;
   phase: CanvasPhase;
   generating: boolean;
   onStartMedia: () => void;
   setSpec: (s: StoryboardSpec) => void;
+  meta: TileMeta;
 }) {
   const planning = phase === "planning";
   const refining = phase === "refining";
@@ -471,7 +501,7 @@ function ScriptTile({
       status={status}
       width="wide"
       tileKey="script"
-      meta={META.script}
+      meta={meta}
       badge={
         planning
           ? <StatusPill tone="active" dot>planning</StatusPill>
@@ -544,7 +574,12 @@ function ScriptTile({
           </div>
 
           {refining && (
-            <div className="pt-1 border-t border-border/60">
+            <div className="pt-2 border-t border-border/60 space-y-2">
+              {/* The run intentionally pauses here for review — spell that out
+                  so a first-timer doesn't think it stalled or finished. */}
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Storyboard ready. Edit any field inline, then generate the media.
+              </p>
               <Button
                 onClick={onStartMedia}
                 size="sm"
@@ -684,11 +719,12 @@ function SceneRow({
 // ---------- 3. Storyboard (Reference + Scenes) -----------------------------
 
 function StoryboardTile({
-  spec, referenceUrl, slots,
+  spec, referenceUrl, slots, meta,
 }: {
   spec: StoryboardSpec;
   referenceUrl: string | null;
   slots: SceneSlots[];
+  meta: TileMeta;
 }) {
   const refReady = !!referenceUrl;
   const keyframeCount = slots.filter((s) => s.keyframeUrl).length;
@@ -706,7 +742,7 @@ function StoryboardTile({
           ? <StatusPill tone="green">ready</StatusPill>
           : <StatusPill tone="active" dot>painting</StatusPill>
       }
-      meta={META.scenes}
+      meta={meta}
     >
       <div className="grid grid-cols-[140px_1fr] gap-3 h-full">
         {/* Reference image — left column */}
@@ -727,8 +763,8 @@ function StoryboardTile({
           <Badge variant="outline" className="text-[10px] self-start">
             {refReady ? "B0 ✓" : "B0 …"}
           </Badge>
-          <p className="text-[9px] text-muted-foreground leading-tight">
-            {META.ref.provider}
+          <p className="text-[10px] text-muted-foreground leading-tight">
+            {meta.provider}
           </p>
         </div>
         {/* Scene keyframes — vertical stack of "thumbnail on top, caption
@@ -797,7 +833,7 @@ function useLoadError() {
 function MediaUnavailable({ label }: { label: string }) {
   return (
     <div className="flex h-full w-full items-center justify-center bg-muted/50">
-      <span className="text-[9px] italic text-muted-foreground/60">{label}</span>
+      <span className="text-[10px] italic text-muted-foreground/60">{label}</span>
     </div>
   );
 }
@@ -832,45 +868,47 @@ function KeyframeStill({ src, ghosted }: { src: string; ghosted: boolean }) {
 function PlayableAudio({ src, className }: { src: string; className?: string }) {
   const { errored, onError } = useLoadError();
   if (errored) {
-    return <span className="text-[9px] italic text-muted-foreground/60">audio unavailable</span>;
+    return <span className="text-[10px] italic text-muted-foreground/60">audio unavailable</span>;
   }
   return <audio src={src} onError={onError} controls preload="none" className={className} />;
 }
 
 function MediaTile({
-  spec, slots, musicUrl, musicFailed, done,
+  spec, slots, musicUrl, musicFailed, done, meta,
 }: {
   spec: StoryboardSpec;
   slots: SceneSlots[];
   musicUrl: string | null;
   musicFailed: boolean;
   done: boolean;
+  meta: { video: TileMeta; tts: TileMeta; music: TileMeta };
 }) {
-  // Stage B2 runs three providers in parallel: image-to-video (Decart),
-  // narration TTS (NVIDIA), and the music score (GMICloud). Each gets its
-  // own card so the user sees the per-provider state at a glance + can
-  // tell at a glance which one is the slowest / which one fell back.
-  // The cards stack vertically inside a single horizontal-canvas slot.
+  // Stage B2 runs three modalities in parallel — image-to-video, narration
+  // TTS, and the music score — each driven by the run's selected provider
+  // (see `meta.video` / `meta.tts` / `meta.music`). Each gets its own card so
+  // the user sees per-modality state at a glance and can tell which one is
+  // slowest or fell back. The cards stack vertically in one canvas slot.
   return (
     <li
       data-tile-key="media"
       className="tile-in shrink-0 w-[480px] flex flex-col gap-3"
     >
-      <VideoStackCard spec={spec} slots={slots} done={done} />
-      <TtsStackCard spec={spec} slots={slots} done={done} />
+      <VideoStackCard spec={spec} slots={slots} done={done} meta={meta.video} />
+      <TtsStackCard spec={spec} slots={slots} done={done} meta={meta.tts} />
       <MusicStackCard
         spec={spec}
         musicUrl={musicUrl}
         musicFailed={musicFailed}
         done={done}
+        meta={meta.music}
       />
     </li>
   );
 }
 
 function VideoStackCard({
-  spec, slots, done,
-}: { spec: StoryboardSpec; slots: SceneSlots[]; done: boolean }) {
+  spec, slots, done, meta,
+}: { spec: StoryboardSpec; slots: SceneSlots[]; done: boolean; meta: TileMeta }) {
   const clipsReady = slots.filter((s) => s.clipUrl).length;
   const total = spec.scenes.length;
   const allReady = clipsReady === total;
@@ -882,7 +920,7 @@ function VideoStackCard({
       title="Video"
       icon={Film}
       status={allReady ? "ready" : anyFailed && done ? "failed" : "active"}
-      meta={META.video}
+      meta={meta}
       badge={
         allReady
           ? <StatusPill tone="green">ready</StatusPill>
@@ -915,7 +953,7 @@ function VideoStackCard({
                   </div>
                 )}
               </div>
-              <p className="text-[9px] text-muted-foreground line-clamp-1">{scene.caption}</p>
+              <p className="text-[10px] text-muted-foreground line-clamp-1">{scene.caption}</p>
             </li>
           );
         })}
@@ -925,8 +963,8 @@ function VideoStackCard({
 }
 
 function TtsStackCard({
-  spec, slots, done,
-}: { spec: StoryboardSpec; slots: SceneSlots[]; done: boolean }) {
+  spec, slots, done, meta,
+}: { spec: StoryboardSpec; slots: SceneSlots[]; done: boolean; meta: TileMeta }) {
   const ready = slots.filter((s) => s.narrationUrl).length;
   const total = spec.scenes.length;
   const allReady = ready === total;
@@ -937,7 +975,7 @@ function TtsStackCard({
       title="TTS narration"
       icon={MusicIcon}
       status={allReady ? "ready" : "active"}
-      meta={META.tts}
+      meta={meta}
       badge={
         allReady
           ? <StatusPill tone="green">ready</StatusPill>
@@ -952,14 +990,14 @@ function TtsStackCard({
           const settled = done || !!slot.narrationFailed;
           return (
             <li key={i} className="rounded-md border bg-muted/20 p-1 space-y-1">
-              <p className="text-[9px] font-mono text-muted-foreground tabular-nums">
+              <p className="text-[10px] font-mono text-muted-foreground tabular-nums">
                 {String(i + 1).padStart(2, "0")} · {scene.duration_sec}s
               </p>
               {slot.narrationUrl ? (
                 <PlayableAudio src={slot.narrationUrl} className="w-full h-6 animate-pop-in" />
               ) : settled ? (
                 <div className="h-6 flex items-center">
-                  <span className="text-[9px] italic text-muted-foreground/60">
+                  <span className="text-[10px] italic text-muted-foreground/60">
                     narration unavailable
                   </span>
                 </div>
@@ -968,7 +1006,7 @@ function TtsStackCard({
                   <GeneratingLoader size="sm" variant="stars" />
                 </div>
               )}
-              <p className="text-[9px] text-muted-foreground line-clamp-2 leading-snug">
+              <p className="text-[10px] text-muted-foreground line-clamp-2 leading-snug">
                 {scene.narration}
               </p>
             </li>
@@ -980,12 +1018,13 @@ function TtsStackCard({
 }
 
 function MusicStackCard({
-  spec, musicUrl, musicFailed, done,
+  spec, musicUrl, musicFailed, done, meta,
 }: {
   spec: StoryboardSpec;
   musicUrl: string | null;
   musicFailed: boolean;
   done: boolean;
+  meta: TileMeta;
 }) {
   const settled = done || musicFailed;
   return (
@@ -995,7 +1034,7 @@ function MusicStackCard({
       title="Score"
       icon={MusicIcon}
       status={musicUrl ? "ready" : settled ? "failed" : "active"}
-      meta={META.music}
+      meta={meta}
       badge={
         musicUrl
           ? <StatusPill tone="green">ready</StatusPill>
@@ -1045,7 +1084,7 @@ function CompositionTile({
       width="wide"
       tileKey="composition"
       badge={<StatusPill tone="green">complete</StatusPill>}
-      meta={META.compose}
+      meta={COMPOSE_META}
       className="tile-celebrate"
     >
       <div className="space-y-2">

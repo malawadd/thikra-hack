@@ -1,17 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { StatusPill, type PillTone } from "@/components/ui/status-pill";
-import { type SceneSlots } from "@/components/genblaze/scene-strip";
 import { PipelineCanvas, type CanvasPhase } from "@/components/studio/pipeline-canvas";
 import { InspectorDrawer } from "@/components/studio/inspector-drawer";
 import { ReadinessNotice } from "@/components/studio/readiness-notice";
+import { ProviderSelector } from "@/components/studio/provider-selector";
 import { RunErrorPanel, type RunError } from "@/components/studio/run-error-panel";
 import { streamSse } from "@/lib/sse-client";
-import { API_BASE, ApiError, playbackUrl } from "@/lib/api-client";
-import { useCreateStoryboard } from "@/lib/queries";
-import type { Asset, SseFrame } from "@/types/pipeline";
+import { API_BASE, ApiError, DEFAULT_SELECTION, playbackUrl, resolveModel, type Selection } from "@/lib/api-client";
+import { useCreateStoryboard, useProviders } from "@/lib/queries";
+import { clearRun, loadRun, saveRun } from "@/lib/run-store";
+import type { Asset, SceneSlots, SseFrame } from "@/types/pipeline";
 import type { StoryboardSpec } from "@/types/storyboard";
 
 function statusFor(phase: CanvasPhase): { tone: PillTone; label: string; dot?: boolean } {
@@ -42,8 +43,89 @@ export function StudioPage() {
   // The current run's fatal error (null when healthy). Drives RunErrorPanel.
   // Kept separate from `phase` so partial progress stays rendered behind it.
   const [runError, setRunError] = useState<RunError | null>(null);
+  // Per-modality provider selection (the switchboard). Defaults to the
+  // simplest path (Replicate + OpenAI); threaded into the media stream body.
+  const [selection, setSelection] = useState<Selection>(DEFAULT_SELECTION);
 
   const createStoryboardMutation = useCreateStoryboard();
+  // The provider catalog drives the per-tile "what's running" metadata so the
+  // canvas reflects the live selection instead of a hardcoded default.
+  const { data: providerMatrix } = useProviders();
+
+  // A run is "live" during storyboard planning and media generation — both
+  // gate the beforeunload guard and disable the provider switchboard.
+  const generating = phase === "planning" || phase === "generating";
+
+  // Guards the initial-mount restore from clobbering the saved snapshot before
+  // we've read it (see the persist effect below).
+  const [restored, setRestored] = useState(false);
+
+  // Restore a run that survived a reload. The media pipeline streams from a
+  // single request, so a reload mid-stream can't resume the stream — we restore
+  // the partial canvas and flip an interrupted run to a recoverable error
+  // (its finished assets are already durable in B2). Runs once on mount.
+  useEffect(() => {
+    // Restore must run post-mount, not from a render-time useState initializer:
+    // loadRun() reads sessionStorage (undefined during SSR), so seeding initial
+    // state from it would desync server/client HTML and trip a hydration
+    // mismatch. React batches these setters into a single re-render, so the
+    // set-state-in-effect lint warning is a false positive here.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const saved = loadRun();
+    if (saved) {
+      setSeed(saved.seed);
+      setSpec(saved.spec);
+      setSceneSlots(saved.sceneSlots);
+      setReferenceUrl(saved.referenceUrl);
+      setMusicUrl(saved.musicUrl);
+      setMusicFailed(saved.musicFailed);
+      setFinalAsset(saved.finalAsset);
+      setRunId(saved.runId);
+      setManifestUri(saved.manifestUri);
+      setSelection(saved.selection);
+      if (saved.phase === "planning" || saved.phase === "generating") {
+        setPhase("error");
+        setRunError({
+          stage: "Interrupted",
+          message: "This run was interrupted before it finished.",
+          hint: "The pipeline streams in a single request that a page reload can't resume. Any completed assets were still saved to B2 — check Files. Retrying re-runs from the start and re-incurs provider cost.",
+          retryable: true,
+        });
+      } else {
+        setPhase(saved.phase);
+      }
+    }
+    setRestored(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  // Persist the run so an accidental reload restores the canvas instead of
+  // dropping to idle. Gated on `restored` so the mount pass can't overwrite the
+  // snapshot before it's read; idle clears the slot.
+  useEffect(() => {
+    if (!restored) return;
+    if (phase === "idle") {
+      clearRun();
+      return;
+    }
+    saveRun({
+      phase, seed, spec, sceneSlots, referenceUrl, musicUrl,
+      musicFailed, finalAsset, runId, manifestUri, selection,
+    });
+  }, [restored, phase, seed, spec, sceneSlots, referenceUrl, musicUrl,
+      musicFailed, finalAsset, runId, manifestUri, selection]);
+
+  // Warn before a reload/close throws away an in-flight, paid run. Only armed
+  // while generating; the persisted snapshot handles the accidental case.
+  useEffect(() => {
+    if (!generating) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [generating]);
 
   const pushFrame = (frame: SseFrame) => setFrames((prev) => [...prev, frame]);
 
@@ -136,16 +218,19 @@ export function StudioPage() {
     setRunId(null);
     setManifestUri(null);
     setRunError(null);
+    // Mirror the model the Script tile shows (the chat modality's resolved
+    // model) so the synthesized Stage A frames never contradict the canvas.
+    const chatModel = resolveModel(selection, providerMatrix, "chat");
     pushFrame({ kind: "stage.start", stage: "A.storyboard" });
     pushFrame({
       kind: "stream", stage: "A.storyboard",
-      event: { type: "step.started", step_index: 0, model: "gpt-4.1-nano", timestamp: new Date().toISOString() },
+      event: { type: "step.started", step_index: 0, model: chatModel, timestamp: new Date().toISOString() },
     });
     try {
       const sb = await createStoryboardMutation.mutateAsync(prompt);
       pushFrame({
         kind: "stream", stage: "A.storyboard",
-        event: { type: "step.completed", step_index: 0, model: "gpt-4.1-nano", timestamp: new Date().toISOString() },
+        event: { type: "step.completed", step_index: 0, model: chatModel, timestamp: new Date().toISOString() },
       });
       pushFrame({ kind: "stage.complete", stage: "A.storyboard" });
       setSpec(sb.spec);
@@ -177,7 +262,7 @@ export function StudioPage() {
     setFinalAsset(null);
     setRunError(null);
     try {
-      for await (const frame of streamSse(`${API_BASE}/runs/media/stream`, { prompt: seed, spec })) {
+      for await (const frame of streamSse(`${API_BASE}/runs/media/stream`, { prompt: seed, spec, selection })) {
         pushFrame(frame);
         harvestSlot(frame, spec.scenes.length);
         markFailedStep(frame, spec.scenes.length);
@@ -231,7 +316,6 @@ export function StudioPage() {
     setPhase("refining");
   };
 
-  const generating = phase === "planning" || phase === "generating";
   const status = statusFor(phase);
 
   return (
@@ -245,11 +329,12 @@ export function StudioPage() {
         <div>
           <h1 className="page-title">Genblaze Media Studio</h1>
           <p className="text-sm text-muted-foreground mt-1.5">
-            One prompt → narrated, scored, captioned MP4. Each module below
-            lights up as Genblaze drives the next stage of the pipeline —
-            OpenAI scripts + paints, Decart animates, NVIDIA narrates,
-            GMICloud scores, ffmpeg composes. Every asset lands in
-            Backblaze B2 via{" "}
+            One prompt → narrated, scored, captioned MP4 — a kitchen-sink test
+            of the Genblaze SDK. Pick <em>any</em> provider per modality in the
+            Providers panel (script, keyframes, motion, narration, score); the
+            pipeline resolves each from the catalog and ffmpeg composes. The
+            default path needs just two keys (OpenAI + Replicate). Every asset
+            lands in Backblaze B2 via{" "}
             <span className="font-mono text-foreground/80">genblaze</span>.
           </p>
         </div>
@@ -263,8 +348,17 @@ export function StudioPage() {
         </div>
       </div>
 
-      {/* Pre-flight advisory (missing keys / ffmpeg) — non-blocking. */}
-      <ReadinessNotice />
+      {/* Pre-flight advisory (missing keys / ffmpeg) — non-blocking. Scoped to
+          the currently-selected providers. */}
+      <ReadinessNotice selection={selection} />
+
+      {/* The switchboard — pick any provider per modality. Collapsed by
+          default since the simplest-path defaults already produce a video. */}
+      <ProviderSelector
+        selection={selection}
+        onChange={setSelection}
+        disabled={generating}
+      />
 
       {/* Persistent failure panel — stays up with partial progress visible
           behind it, unlike the ephemeral toast. */}
@@ -281,6 +375,8 @@ export function StudioPage() {
           left-to-right (`tile-in` keyframe) as each upstream stage delivers. */}
       <PipelineCanvas
         phase={phase}
+        selection={selection}
+        matrix={providerMatrix}
         seed={seed}
         spec={spec}
         setSpec={setSpec}

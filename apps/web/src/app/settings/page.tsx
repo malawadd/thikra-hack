@@ -7,10 +7,17 @@ import { ErrorState } from "@/components/ui/error-state";
 import { useHealth } from "@/lib/queries";
 
 const PROVIDER_LABEL: Record<string, string> = {
-  openai_key_present: "OpenAI",
-  nvidia_key_present: "NVIDIA",
-  decart_key_present: "Decart",
-  gmi_key_present:    "GMICloud",
+  openai_key_present:     "OpenAI",
+  replicate_key_present:  "Replicate",
+  google_key_present:     "Google",
+  nvidia_key_present:     "NVIDIA",
+  decart_key_present:     "Decart",
+  gmi_key_present:        "GMICloud",
+  runway_key_present:     "Runway",
+  luma_key_present:       "Luma",
+  elevenlabs_key_present: "ElevenLabs",
+  lmnt_key_present:       "LMNT",
+  hume_key_present:       "Hume",
 };
 
 export default function SettingsPage() {

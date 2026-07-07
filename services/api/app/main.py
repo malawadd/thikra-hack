@@ -43,8 +43,9 @@ from app.repo import (  # noqa: E402
     sink,
     snap_scene_durations,
 )
+from app.repo import provider_catalog as catalog  # noqa: E402
 from app.repo.composer import compose_final  # noqa: E402
-from app.types.api import MediaRequest, PromptRequest  # noqa: E402
+from app.types.api import MediaRequest, PromptRequest, ProviderChoice  # noqa: E402
 
 setup_logging(settings.log_level)
 logger = logging.getLogger("api.main")
@@ -122,10 +123,16 @@ async def _log_startup() -> None:
         "cors_origins": settings.cors_origins,
         "providers_configured": {
             "openai": bool(settings.openai_api_key),
+            "replicate": bool(settings.replicate_api_token),
             "google": bool(settings.google_api_key),
             "nvidia": bool(settings.nvidia_api_key),
             "decart": bool(settings.decart_api_key),
             "gmi": bool(settings.gmi_api_key),
+            "runway": bool(settings.runway_api_secret),
+            "luma": bool(settings.luma_api_key),
+            "elevenlabs": bool(settings.elevenlabs_api_key),
+            "lmnt": bool(settings.lmnt_api_key),
+            "hume": bool(settings.hume_api_key),
         },
     })
 
@@ -260,12 +267,49 @@ def health():
         "ffmpeg_present": ffmpeg_ok,
         "providers": {
             "openai_key_present": bool(settings.openai_api_key),
+            "replicate_key_present": bool(settings.replicate_api_token),
             "google_key_present": bool(settings.google_api_key),
             "nvidia_key_present": bool(settings.nvidia_api_key),
             "decart_key_present": bool(settings.decart_api_key),
             "gmi_key_present": bool(settings.gmi_api_key),
+            "runway_key_present": bool(settings.runway_api_secret),
+            "luma_key_present": bool(settings.luma_api_key),
+            "elevenlabs_key_present": bool(settings.elevenlabs_api_key),
+            "lmnt_key_present": bool(settings.lmnt_api_key),
+            "hume_key_present": bool(settings.hume_api_key),
         },
     }
+
+
+@app.get("/providers")
+def get_providers():
+    """The switchboard catalog — drives the UI's per-modality vendor/model pickers.
+
+    Returns `{modality: [{vendor, default_model, suggested_models, modality,
+    key_available}]}`. `key_available` reflects which API keys are configured,
+    so the UI can grey out vendors the operator hasn't set up. Pure dict
+    construction (no I/O, no provider instantiation) → sync `def`.
+    """
+    return {"providers": catalog.matrix()}
+
+
+def _resolve_choice(slot: str, choice: ProviderChoice) -> tuple[catalog.CatalogEntry, str]:
+    """Resolve a `ProviderChoice` to `(entry, model)`; 422 on an unknown vendor.
+
+    Model-slug correctness is NOT checked here — providers validate slugs
+    against regex families at call time (and Replicate accepts any
+    `owner/model`), so a bad slug surfaces at preflight/runtime, classified
+    like any other provider error. `choice.model=None` falls back to the
+    catalog's curated `default_model` for the vendor.
+    """
+    try:
+        entry = catalog.resolve(slot, choice.vendor)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "bad_selection", "retryable": False, "message": str(exc),
+            "hint": f"Pick a vendor listed under '{slot}' in GET /providers.",
+        }) from exc
+    return entry, (choice.model or entry.default_model)
 
 
 @app.post("/runs/storyboard")
@@ -302,16 +346,33 @@ def stream_media(req: MediaRequest):
     stays responsive during the ~10-30s compose.
     """
     log = logging.getLogger("app.stream_media")
+    # Resolve the per-modality provider selection BEFORE streaming starts, so an
+    # unknown vendor returns a clean 422 (not a mid-stream error frame).
+    sel = req.selection
+    chat_entry, chat_model = _resolve_choice(catalog.CHAT, sel.chat)
+    image_entry, image_model = _resolve_choice(catalog.IMAGE, sel.image)
+    video_entry, video_model = _resolve_choice(catalog.VIDEO, sel.video)
+    tts_entry, tts_model = _resolve_choice(catalog.TTS, sel.tts)
+    music_entry, music_model = _resolve_choice(catalog.MUSIC, sel.music)
     log.info("media stream endpoint", extra={
         "endpoint": "POST /runs/media/stream",
         "prompt_chars": len(req.prompt),
         "prompt_preview": req.prompt[:240],
         "spec_provided": req.spec is not None,
         "scene_count": len(req.spec.scenes) if req.spec else None,
+        "selection": {
+            "chat": f"{chat_entry.vendor}/{chat_model}",
+            "image": f"{image_entry.vendor}/{image_model}",
+            "video": f"{video_entry.vendor}/{video_model}",
+            "tts": f"{tts_entry.vendor}/{tts_model}",
+            "music": f"{music_entry.vendor}/{music_model}",
+        },
     })
-    # Snap scene durations to the video provider's grid (Kling renders 5s/10s
-    # only) so B2 and the composer share one source of truth for clip length.
-    spec = snap_scene_durations(req.spec or generate_storyboard(req.prompt)[0])
+    # Snap scene durations to the selected video provider's grid (e.g. Kling
+    # renders 5s/10s only) so B2 and the composer share one clip-length truth.
+    spec = snap_scene_durations(
+        req.spec or generate_storyboard(req.prompt, chat_model)[0], video_entry,
+    )
 
     async def gen():
         # Outer try/except converts ANY uncaught exception (provider failure,
@@ -327,7 +388,8 @@ def stream_media(req: MediaRequest):
             yield _sse({"kind": "stage.start", "stage": current_stage})
             b0_result = None
             async for frame, captured in _stream_stage(
-                build_reference_pipeline(spec), current_stage, timeout=240,
+                build_reference_pipeline(spec, image_entry, image_model),
+                current_stage, timeout=240,
             ):
                 yield frame
                 if captured is not None:
@@ -342,7 +404,8 @@ def stream_media(req: MediaRequest):
             yield _sse({"kind": "stage.start", "stage": current_stage})
             b1_result = None
             async for frame, captured in _stream_stage(
-                build_keyframe_pipeline(spec, b0_result), current_stage, timeout=600,
+                build_keyframe_pipeline(spec, image_entry, image_model, b0_result),
+                current_stage, timeout=600,
             ):
                 yield frame
                 if captured is not None:
@@ -361,7 +424,13 @@ def stream_media(req: MediaRequest):
             yield _sse({"kind": "stage.start", "stage": current_stage})
             b2_result = None
             async for frame, captured in _stream_stage(
-                build_media_pipeline(spec, b1_result), current_stage, timeout=900,
+                build_media_pipeline(
+                    spec, b1_result,
+                    video_entry=video_entry, video_model=video_model,
+                    tts_entry=tts_entry, tts_model=tts_model,
+                    music_entry=music_entry, music_model=music_model,
+                ),
+                current_stage, timeout=900,
                 fail_fast=False, raise_on_failure=False,
             ):
                 yield frame

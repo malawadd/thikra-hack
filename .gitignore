@@ -25,3 +25,6 @@ __pycache__/
 # Caches
 .cache/
 .DS_Store
+
+# Impeccable design-tool local state (critique snapshots + hook config)
+.impeccable/

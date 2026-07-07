@@ -4,13 +4,24 @@ version = "0.1.0"
 description = "Multi-provider generative-media pipeline (Genblaze + Backblaze B2)."
 requires-python = ">=3.11"
 dependencies = [
-  "genblaze-core>=0.3.2,<0.4",
-  "genblaze-s3>=0.3.2,<0.4",
-  "genblaze-openai>=0.3.0,<0.4",
-  "genblaze-google>=0.3.0,<0.4",
-  "genblaze-decart>=0.3.0,<0.4",
-  "genblaze-nvidia>=0.3.0,<0.4",
-  "genblaze-gmicloud>=0.3.1,<0.4",
+  # Core + storage. Bumped 0.3.2 → 0.3.4: every newly-released provider adapter
+  # (replicate/runway/luma/elevenlabs/lmnt/hume) requires genblaze-core>=0.3.4.
+  "genblaze-core>=0.3.4,<0.4",
+  "genblaze-s3>=0.3.4,<0.4",
+  # First-wave providers (bumped to their 0.3.1 releases for parity).
+  "genblaze-openai>=0.3.1,<0.4",
+  "genblaze-google>=0.3.1,<0.4",
+  "genblaze-decart>=0.3.1,<0.4",
+  "genblaze-nvidia>=0.3.1,<0.4",
+  "genblaze-gmicloud>=0.3.2,<0.4",
+  # Kitchen-sink providers — full Genblaze coverage across modalities.
+  # Replicate is multi-modal (image/video/audio); the rest are single-modality.
+  "genblaze-replicate>=0.3.2,<0.4",   # image + video + audio (one token)
+  "genblaze-runway>=0.3.1,<0.4",      # video (Runway Gen)
+  "genblaze-luma>=0.3.1,<0.4",        # video (Luma Dream Machine)
+  "genblaze-elevenlabs>=0.3.1,<0.4",  # TTS (+ SFX, not yet wired)
+  "genblaze-lmnt>=0.3.1,<0.4",        # TTS
+  "genblaze-hume>=0.3.1,<0.4",        # TTS (Hume Octave)
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "pydantic-settings>=2.4",

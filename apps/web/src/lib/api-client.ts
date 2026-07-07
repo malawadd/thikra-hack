@@ -26,12 +26,101 @@ export interface HealthResponse {
   b2_connected: boolean;
   /** Whether the `ffmpeg` binary is on the API host's PATH (Stage C compose). */
   ffmpeg_present: boolean;
+  // Per-vendor key presence as `<vendor>_key_present` booleans. The original
+  // five are always present; the kitchen-sink vendors are optional so older
+  // backends don't break the type.
   providers: {
     openai_key_present: boolean;
     nvidia_key_present: boolean;
     decart_key_present: boolean;
     gmi_key_present: boolean;
+    replicate_key_present?: boolean;
+    google_key_present?: boolean;
+    runway_key_present?: boolean;
+    luma_key_present?: boolean;
+    elevenlabs_key_present?: boolean;
+    lmnt_key_present?: boolean;
+    hume_key_present?: boolean;
   };
+}
+
+// --- Provider switchboard ---------------------------------------------------
+
+/** The 5 switchboard modalities a run picks a provider for. */
+export type Modality = "chat" | "image" | "video" | "tts" | "music";
+
+/** One vendor option for a modality (from `GET /providers`). */
+export interface ProviderOption {
+  vendor: string;
+  default_model: string;
+  suggested_models: string[];
+  modality: string;
+  /** Whether this vendor's API key is configured on the backend. */
+  key_available: boolean;
+}
+
+export type ProvidersMatrix = Record<Modality, ProviderOption[]>;
+
+/** A per-modality choice. `model` omitted/null → the vendor's default. */
+export interface ProviderChoice {
+  vendor: string;
+  model?: string | null;
+}
+
+export type Selection = Record<Modality, ProviderChoice>;
+
+/**
+ * The out-of-box "simplest path" — fewest API keys (Replicate + OpenAI).
+ *
+ * These vendor strings are the one place the frontend hard-couples to the
+ * backend catalog keys in `services/api/app/repo/provider_catalog.py`. Each
+ * must exist in `matrix[modality]`, or its `<Select>` renders empty and
+ * `resolveModel` falls back to the placeholder — keep them in sync.
+ */
+export const DEFAULT_SELECTION: Selection = {
+  chat: { vendor: "openai" },
+  image: { vendor: "replicate" },
+  video: { vendor: "replicate" },
+  tts: { vendor: "openai" },
+  music: { vendor: "replicate" },
+};
+
+export const MODALITIES: Modality[] = ["chat", "image", "video", "tts", "music"];
+
+/** Display labels for the lowercase vendor keys the catalog uses. Naive
+ *  capitalization would yield "Openai" / "Gmicloud"; keep the canonical
+ *  casing here and fall back to the raw key for any future vendor. */
+export const VENDOR_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  replicate: "Replicate",
+  google: "Google",
+  nvidia: "NVIDIA",
+  decart: "Decart",
+  gmicloud: "GMICloud",
+  runway: "Runway",
+  luma: "Luma",
+  elevenlabs: "ElevenLabs",
+  lmnt: "LMNT",
+  hume: "Hume",
+};
+
+export const vendorLabel = (vendor: string): string => VENDOR_LABELS[vendor] ?? vendor;
+
+/**
+ * The model that will actually run for a modality: the explicit per-run choice
+ * if set, else the selected vendor's catalog default. `matrix` may be undefined
+ * while `GET /providers` is in flight — fall back to the raw choice or a
+ * neutral placeholder so a tile never renders a stale hardcoded model.
+ */
+export function resolveModel(
+  selection: Selection,
+  matrix: ProvidersMatrix | undefined,
+  m: Modality,
+): string {
+  const choice = selection[m];
+  if (choice.model) return choice.model;
+  const opt = matrix?.[m]?.find((o) => o.vendor === choice.vendor);
+  return opt?.default_model ?? "default";
 }
 
 export interface StoryboardScene {
@@ -121,6 +210,12 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function getHealth(): Promise<HealthResponse> {
   return apiFetch<HealthResponse>("/health");
+}
+
+/** The provider switchboard catalog — drives the per-modality pickers. */
+export async function getProviders(): Promise<ProvidersMatrix> {
+  const data = await apiFetch<{ providers: ProvidersMatrix }>("/providers");
+  return data.providers;
 }
 
 /** List every artifact written to B2 under `explainers/`. */

@@ -6,8 +6,14 @@ import {
   createStoryboard,
   getFiles,
   getHealth,
+  getProviders,
 } from "@/lib/api-client";
-import type { FileMetadata, HealthResponse, StoryboardResponse } from "@/lib/api-client";
+import type {
+  FileMetadata,
+  HealthResponse,
+  ProvidersMatrix,
+  StoryboardResponse,
+} from "@/lib/api-client";
 
 // Single source of truth for query keys. Keep tightly scoped so invalidating
 // one bucket doesn't blow away unrelated caches.
@@ -15,6 +21,7 @@ export const qk = {
   all: ["genblaze"] as const,
   files: () => [...qk.all, "files"] as const,
   health: () => [...qk.all, "health"] as const,
+  providers: () => [...qk.all, "providers"] as const,
 };
 
 export function useFiles() {
@@ -30,6 +37,16 @@ export function useHealth() {
     queryFn: getHealth,
     refetchInterval: 60_000,
     staleTime: 30_000,
+  });
+}
+
+/** The provider switchboard catalog. Static for a backend lifetime, so cache
+ * it indefinitely (it only changes when the API ships new providers). */
+export function useProviders() {
+  return useQuery<ProvidersMatrix, ApiError>({
+    queryKey: qk.providers(),
+    queryFn: getProviders,
+    staleTime: Infinity,
   });
 }
 
