@@ -129,8 +129,8 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
         ),
         "openai": CatalogEntry(
             slot=IMAGE, vendor="openai", env_key="openai_api_key",
-            default_model="gpt-image-1",
-            suggested_models=("gpt-image-1", "gpt-image-1-mini", "dall-e-3"),
+            default_model="gpt-image-1-mini",
+            suggested_models=("gpt-image-1-mini", "gpt-image-1", "dall-e-3"),
             modality=Modality.IMAGE,
             make=lambda: DalleProvider(api_key=settings.openai_api_key),
         ),

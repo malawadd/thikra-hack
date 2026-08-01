@@ -41,11 +41,11 @@ def _spec() -> StoryboardSpec:
         title="t",
         style_prompt="Flat-vector illustration, warm pastel palette, soft lighting",
         music_prompt="m",
-        total_duration_sec=32.0,
+        total_duration_sec=24.0,
         scenes=[
             Scene(image_prompt=f"img {i}", motion_prompt="motion",
                   narration="narr", caption="c", duration_sec=8.0)
-            for i in range(4)
+            for i in range(3)
         ],
     )
 
@@ -108,12 +108,12 @@ def test_snap_scene_durations_quantizes_to_grid() -> None:
     spec = _spec()
     spec = spec.model_copy(update={"scenes": [
         s.model_copy(update={"duration_sec": d})
-        for s, d in zip(spec.scenes, [6.0, 8.0, 5.0, 11.0], strict=True)
+        for s, d in zip(spec.scenes, [6.0, 8.0, 11.0], strict=True)
     ]})
     out = snap_scene_durations(spec, VIDEO_GMI)
-    assert [s.duration_sec for s in out.scenes] == [5.0, 10.0, 5.0, 10.0]
-    assert out.total_duration_sec == 30.0
-    assert [s.duration_sec for s in spec.scenes] == [6.0, 8.0, 5.0, 11.0]
+    assert [s.duration_sec for s in out.scenes] == [5.0, 10.0, 10.0]
+    assert out.total_duration_sec == 25.0
+    assert [s.duration_sec for s in spec.scenes] == [6.0, 8.0, 11.0]
 
 
 def test_snap_scene_durations_is_noop_without_grid() -> None:

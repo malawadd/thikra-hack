@@ -72,8 +72,8 @@ class Scene(BaseModel):
 class StoryboardSpec(BaseModel):
     title: str
     music_prompt: str
-    total_duration_sec: float  # 20.0 – 120.0
-    scenes: list[Scene]        # 3 – 8 entries
+    total_duration_sec: float  # 15.0 – 30.0
+    scenes: list[Scene]        # exactly 3 entries
 ```
 
 Bounds are enforced by Pydantic, not the prompt. If the model returns a

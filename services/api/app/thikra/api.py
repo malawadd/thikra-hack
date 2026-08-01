@@ -104,7 +104,7 @@ def _conflict(message: str, code: str = "POLICY_CONFLICT") -> HTTPException:
 @router.get("/health/ready")
 def ready(db: Session = Depends(get_db)):
     try:
-        ws = workspace(db)
+        workspace(db)
     except RuntimeError as exc:
         raise HTTPException(
             status_code=503, detail={"code": "DATABASE_NOT_READY", "message": str(exc)}
@@ -124,7 +124,10 @@ def ready(db: Session = Depends(get_db)):
             raise HTTPException(
                 status_code=503, detail={"code": "PRODUCTION_CONFIG_MISSING", "missing": missing}
             )
-    return {"status": "ready", "mode": ws.environment}
+    # The workspace may have been created during an earlier DEMO boot. Runtime
+    # mode is configuration, not historical workspace data; report the active
+    # gateway/generation mode so the UI cannot label a SANDBOX run as DEMO.
+    return {"status": "ready", "mode": settings.app_mode.upper()}
 
 
 @router.get("/health/integrations")
@@ -260,6 +263,29 @@ async def create_authorization(request: AuthorizationCreate, db: Session = Depen
     cap = mandate_schema(version)["budget_cap_minor"]
     if request.maximum_amount_minor > cap:
         raise _conflict("Authorization exceeds the confirmed mandate budget", "BUDGET_EXCEEDED")
+    if request.verification_only:
+        if settings.app_mode.upper() != "SANDBOX":
+            raise _conflict(
+                "Zero-value card verification is available only in sandbox",
+                "SANDBOX_ONLY",
+            )
+        if any(
+            amount != 0
+            for amount in (
+                request.maximum_amount_minor,
+                request.estimated_amount_minor,
+                request.retry_reserve_minor,
+            )
+        ):
+            raise _conflict(
+                "Verification-only sessions must use a zero amount",
+                "ZERO_VERIFICATION_AMOUNT_REQUIRED",
+            )
+    elif request.maximum_amount_minor < 100:
+        raise _conflict(
+            "Paid authorization must be at least 100 minor units",
+            "AUTHORIZATION_AMOUNT_TOO_LOW",
+        )
     try:
         result = await gateway().create_authorization(request.model_dump(mode="json"))
     except Exception as exc:
@@ -311,6 +337,7 @@ async def create_authorization(request: AuthorizationCreate, db: Session = Depen
         payload={
             "payment_id": payment.id,
             "maximum_amount_minor": request.maximum_amount_minor,
+            "verification_only": request.verification_only,
             "simulated": bool(result.get("simulated")),
         },
         related_object_ids=[payment.id, mandate.id],
@@ -322,6 +349,7 @@ async def create_authorization(request: AuthorizationCreate, db: Session = Depen
         "iframe_url": result.get("iframe_url"),
         "publishable_key": settings.prava_publishable_key if not result.get("simulated") else None,
         "simulated": bool(result.get("simulated")),
+        "verification_only": request.verification_only,
     }
     return response
 
@@ -342,8 +370,13 @@ async def poll_payment(payment_id: str, db: Session = Depends(get_db)):
         EPHEMERAL_CREDENTIALS[payment.external_session_id] = credentials
     status = sanitized.get("status", "pending")
     if status == "completed":
-        payment.authorization_state = "AUTHORIZED"
-        payment.payment_state = "CREDENTIAL_READY"
+        if payment.maximum_amount_minor == 0:
+            payment.authorization_state = "VERIFIED"
+            payment.payment_state = "ZERO_VALUE_VERIFIED"
+            EPHEMERAL_CREDENTIALS.pop(payment.external_session_id, None)
+        else:
+            payment.authorization_state = "AUTHORIZED"
+            payment.payment_state = "CREDENTIAL_READY"
     elif status == "failed":
         payment.authorization_state = "FAILED"
         payment.payment_state = "FAILED"
@@ -361,8 +394,41 @@ async def poll_payment(payment_id: str, db: Session = Depends(get_db)):
     return {
         "payment": serialize_payment(db, payment, detail=True),
         "result": sanitized,
-        "credential_available_server_side": bool(credentials),
+        "credential_available_server_side": bool(credentials) and payment.maximum_amount_minor > 0,
     }
+
+
+@router.post("/thikra/payments/{payment_id}/revoke")
+async def revoke_payment(payment_id: str, db: Session = Depends(get_db)):
+    payment = db.get(PaymentRecord, payment_id)
+    if payment is None:
+        raise _not_found("Payment")
+    try:
+        result = await gateway().revoke(payment.external_session_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail={"code": "PRAVA_REVOKE_FAILED", "message": str(exc)}
+        ) from exc
+    payment.authorization_state = "REVOKED"
+    payment.payment_state = "REVOKED"
+    event_key = f"revoke:{payment.external_session_id}"
+    if not db.scalar(select(PaymentEvent).where(PaymentEvent.idempotency_key == event_key)):
+        db.add(
+            PaymentEvent(
+                payment_id=payment.id,
+                event_type="payment.session_revoked",
+                sanitized_payload_json=canonical_json(
+                    {
+                        "success": bool(result.get("success")),
+                        "session_id": payment.external_session_id,
+                    }
+                ),
+                idempotency_key=event_key,
+            )
+        )
+    EPHEMERAL_CREDENTIALS.pop(payment.external_session_id, None)
+    db.commit()
+    return serialize_payment(db, payment, detail=True)
 
 
 @router.post("/thikra/payments/{payment_id}/report")
@@ -597,9 +663,7 @@ def stream_run_events(run_id: str, last_event_id: str | None = None, db: Session
                 if progress >= 1:
                     from app.thikra.database import SessionLocal
 
-                    await asyncio.to_thread(
-                        lambda: _materialize_with_session(SessionLocal, run_id)
-                    )
+                    await asyncio.to_thread(lambda: _materialize_with_session(SessionLocal, run_id))
                 yield f"id: {event_id}\ndata: {json.dumps(payload)}\n\n"
                 if progress < 1:
                     await asyncio.sleep(0.12)

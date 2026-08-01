@@ -11,6 +11,11 @@ Stage B0 generates one reference image; Stage B1 generates one keyframe per
 scene; Stage B2 turns each keyframe into a short video clip, narrates it, and
 lays a music bed underneath.
 
+The accountable Thikra flow fixes the storyboard at exactly three scenes. This
+matches the three editable planning records and gives live sandbox runs a
+deterministic paid-call ceiling: one reference image, three keyframes, three
+video clips, three narration clips, and one music bed.
+
 This is a **provider switchboard**: every modality (script, image, video, TTS,
 music) can be driven by ANY provider in the catalog, chosen per-run. The UI's
 Providers panel is fed by `GET /providers`; the selection rides the
@@ -168,7 +173,7 @@ means the provider accepts any slug (no model families).
 | chat  | openai      | `chat()` fn             | `OPENAI_API_KEY`      | `gpt-4.1-nano` |
 | image | replicate   | `ReplicateProvider`     | `REPLICATE_API_TOKEN` | `black-forest-labs/flux-schnell` |
 | image | google      | `ImagenProvider`        | `GOOGLE_API_KEY`      | `imagen-4.0-generate-001` |
-| image | openai      | `DalleProvider`         | `OPENAI_API_KEY`      | `gpt-image-1` |
+| image | openai      | `DalleProvider`         | `OPENAI_API_KEY`      | `gpt-image-1-mini` |
 | image | nvidia      | `NvidiaImageProvider`   | `NVIDIA_API_KEY`      | `black-forest-labs/flux.1-schnell` |
 | image | decart      | `DecartImageProvider`   | `DECART_API_KEY`      | `lucy-pro-t2i` |
 | video | replicate   | `ReplicateProvider`     | `REPLICATE_API_TOKEN` | `minimax/video-01` |

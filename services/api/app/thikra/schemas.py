@@ -98,9 +98,10 @@ class AuthorizationCreate(BaseModel):
     run_id: str | None = None
     merchant: str = Field(min_length=2, max_length=180)
     merchant_url: str
-    maximum_amount_minor: int = Field(ge=100)
+    maximum_amount_minor: int = Field(ge=0)
     estimated_amount_minor: int = Field(ge=0)
     retry_reserve_minor: int = Field(ge=0)
+    verification_only: bool = False
     currency: str = "USD"
     user_id: str = "demo-user"
     user_email: EmailStr = "brand.manager@thikra.demo"

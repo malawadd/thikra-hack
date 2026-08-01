@@ -63,7 +63,6 @@ class PravaPaymentGateway:
             "total_amount": amount,
             "currency": request["currency"],
             "external_order_ref": request["idempotency_key"],
-            "callback_url": f"{settings.public_web_url}/payments",
             "description": f"Scoped creative procurement for mandate {request['mandate_id']}",
             "purchase_context": [
                 {
@@ -85,6 +84,12 @@ class PravaPaymentGateway:
                 }
             ],
         }
+        # Prava accepts callback URLs only over HTTPS. Local sandbox runs use
+        # an HTTP dev server, so omit the optional callback and keep the user
+        # in the embedded iframe; deployed HTTPS environments still receive it.
+        callback_url = f"{settings.public_web_url}/payments"
+        if callback_url.startswith("https://"):
+            body["callback_url"] = callback_url
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
                 f"{settings.prava_backend_url}/v1/sessions",

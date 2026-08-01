@@ -5,14 +5,33 @@
   let {
     session,
     publishableKey,
-    onerror
-  }: { session: { session_token: string; iframe_url: string }; publishableKey: string; onerror?: (message: string) => void } = $props();
+    onerror,
+    onnewsession
+  }: {
+    session: { session_token: string; iframe_url: string };
+    publishableKey: string;
+    onerror?: (message: string) => void;
+    onnewsession?: () => void | Promise<void>;
+  } = $props();
   let container: HTMLDivElement;
   let loading = $state(true);
   let ready = $state(false);
   let error = $state('');
   let validation = $state<any>(null);
+  let requestingSession = $state(false);
   let sdk: any = null;
+
+  function errorMessage(cause: unknown): string {
+    const value = cause && typeof cause === 'object' && 'message' in cause
+      ? (cause as { message?: unknown }).message
+      : cause;
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object' && 'message' in value) {
+      const nested = (value as { message?: unknown }).message;
+      if (typeof nested === 'string') return nested;
+    }
+    try { return JSON.stringify(value); } catch { return 'Prava authorization failed.'; }
+  }
 
   async function mount() {
     loading = true;
@@ -28,13 +47,20 @@
         onReady: () => { ready = true; loading = false; },
         onChange: (state: any) => validation = state,
         onSuccess: () => {},
-        onError: (cause: any) => { error = cause.message; loading = false; onerror?.(cause.message); }
+        onError: (cause: unknown) => { error = errorMessage(cause); loading = false; onerror?.(error); }
       });
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
+      error = errorMessage(cause);
       loading = false;
       onerror?.(error);
     }
+  }
+
+  async function requestNewSession() {
+    if (!onnewsession) return;
+    requestingSession = true;
+    try { await onnewsession(); }
+    finally { requestingSession = false; }
   }
 
   onMount(() => {
@@ -50,7 +76,15 @@
 
 <div class="card card-pad">
   <div style="display:flex;gap:12px;align-items:center;margin-bottom:15px"><LockKeyhole size={19} /><div><strong>Prava secure authorization</strong><div class="small muted">Card data stays inside Prava's PCI-compliant iframe.</div></div></div>
-  {#if error}<div class="error-box"><span>{error}</span><button class="btn btn-secondary" onclick={mount}>Try again</button></div>{/if}
+  {#if error}
+    <div class="error-box">
+      <span>{error}</span>
+      <div class="actions">
+        {#if onnewsession}<button class="btn btn-primary" onclick={requestNewSession} disabled={requestingSession}>{requestingSession ? 'Creating session…' : 'Request new session'}</button>{/if}
+        <button class="btn btn-secondary" onclick={mount} disabled={requestingSession}>Reload current iframe</button>
+      </div>
+    </div>
+  {/if}
   {#if loading && !error}<div class="loading"><div class="spinner"></div>Loading secure card form…</div>{/if}
   {#if validation && ready}
     <div class="actions" style="margin-bottom:10px">

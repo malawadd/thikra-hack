@@ -31,9 +31,22 @@
   let selection = $state<Record<string, { vendor: string; model: string }>>({});
   let payment = $state<any>(null);
   let mode = $state('DEMO');
+  const merchantUrls: Record<string, string> = {
+    gmicloud: 'https://console.gmicloud.ai', openai: 'https://openai.com',
+    replicate: 'https://replicate.com'
+  };
   onMount(async () => { try { mode = (await api<any>('/health/ready')).mode; } catch { mode = 'UNKNOWN'; } });
 
   const csv = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
+  const estimatedAmount = () => Math.min(compiled?.mandate?.budget_cap_minor ?? 0, 99);
+  function errorMessage(cause: unknown): string {
+    if (cause instanceof Error) return cause.message;
+    if (cause && typeof cause === 'object' && 'message' in cause) {
+      const message = (cause as { message?: unknown }).message;
+      if (typeof message === 'string') return message;
+    }
+    try { return JSON.stringify(cause); } catch { return 'Authorization failed.'; }
+  }
   async function compileMandate() {
     busy = true; error = '';
     try {
@@ -65,22 +78,42 @@
     } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
     finally { busy = false; }
   }
-  async function authorize() {
+  async function authorize(verificationOnly = false) {
     busy = true; error = '';
     try {
       payment = await api('/thikra/payments/authorizations', { method: 'POST', body: JSON.stringify({
-        mandate_id: compiled.mandate_id, merchant: `${selection.video?.vendor ?? 'Selected provider'} creative services`, merchant_url: 'https://replicate.com',
-        maximum_amount_minor: compiled.mandate.budget_cap_minor, estimated_amount_minor: 540, retry_reserve_minor: compiled.mandate.retry_budget_minor,
-        currency: compiled.mandate.currency, idempotency_key: `authorization-${compiled.mandate_id}`
+        mandate_id: compiled.mandate_id, merchant: `${selection.video?.vendor ?? 'Selected provider'} creative services`,
+        merchant_url: merchantUrls[selection.video?.vendor] ?? 'https://openai.com',
+        maximum_amount_minor: verificationOnly ? 0 : compiled.mandate.budget_cap_minor,
+        estimated_amount_minor: verificationOnly ? 0 : estimatedAmount(),
+        retry_reserve_minor: verificationOnly ? 0 : compiled.mandate.retry_budget_minor,
+        verification_only: verificationOnly,
+        currency: compiled.mandate.currency, idempotency_key: `authorization-${compiled.mandate_id}-${crypto.randomUUID()}`
       }) });
-    } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+    } catch (cause) { error = errorMessage(cause); }
     finally { busy = false; }
   }
   async function pollPayment() {
     busy = true;
-    try { payment = (await api<any>(`/thikra/payments/${payment.id}/poll`, { method: 'POST', body: '{}' })).payment; }
-    catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+    try {
+      const current = payment;
+      const result = await api<any>(`/thikra/payments/${payment.id}/poll`, { method: 'POST', body: '{}' });
+      payment = { ...current, ...result.payment };
+      if (payment.authorization_state === 'FAILED') {
+        error = errorMessage(result.result?.transactions?.[0]?.error ?? 'Prava authorization failed.');
+      }
+    }
+    catch (cause) { error = errorMessage(cause); }
     finally { busy = false; }
+  }
+  async function retryAuthorization(verificationOnly = false) {
+    const previous = payment;
+    payment = null;
+    if (previous?.id) {
+      try { await api(`/thikra/payments/${previous.id}/revoke`, { method: 'POST', body: '{}' }); }
+      catch { /* Consumed and expired sessions may no longer be revocable. */ }
+    }
+    await authorize(verificationOnly);
   }
   async function launch() {
     busy = true; error = '';
@@ -176,13 +209,27 @@
       <h2>Scoped authorization</h2><p class="lede">Authorization is not settlement. This permits one bounded provider purchase within the confirmed mandate.</p>
       <div class="grid grid-3 section">
         <div class="card card-pad"><span class="stat-label">Maximum authorized</span><strong class="stat-value">{money(compiled.mandate.budget_cap_minor)}</strong></div>
-        <div class="card card-pad"><span class="stat-label">Estimated purchase</span><strong class="stat-value">{money(540)}</strong><span class="stat-note">Estimate only</span></div>
+        <div class="card card-pad"><span class="stat-label">Estimated purchase</span><strong class="stat-value">{money(estimatedAmount())}</strong><span class="stat-note">Audited call ceiling</span></div>
         <div class="card card-pad"><span class="stat-label">Retry reserve</span><strong class="stat-value">{money(compiled.mandate.retry_budget_minor)}</strong></div>
       </div>
       <div class="card card-pad section"><strong>Exact action</strong><p class="muted">Authorize Thikra to obtain scoped payment credentials for the selected generative-media merchant, up to {money(compiled.mandate.budget_cap_minor)}, expiring in 15 minutes. Provider delivery and final acceptance remain separate states.</p><span class="badge" data-tone={mode === 'DEMO' ? 'warning' : 'info'}>{mode === 'DEMO' ? 'Demo payment mode' : `${mode} Prava mode`}</span></div>
-      {#if !payment}<button class="btn btn-primary section" onclick={authorize} disabled={busy}><CreditCard size={16} /> {busy ? 'Creating authorization…' : 'Authorize bounded amount'}</button>
-      {:else if payment.checkout && !payment.checkout.simulated}<PravaCardForm session={payment.checkout} publishableKey={payment.checkout.publishable_key} onerror={(message) => error = message} /><button class="btn btn-secondary" onclick={pollPayment}>Check authorization</button>
-      {:else}<div class="card card-pad section"><StatusBadge status={payment.authorization_state} /><p class="muted">Simulated authorization recorded as demo data. No real card or payment was used.</p></div>{/if}
+      {#if !payment}
+        <div class="actions section">
+          <button class="btn btn-primary" onclick={() => authorize(false)} disabled={busy}><CreditCard size={16} /> {busy ? 'Creating session…' : 'Authorize bounded amount'}</button>
+          {#if mode === 'SANDBOX'}<button class="btn btn-secondary" onclick={() => authorize(true)} disabled={busy}>Test card with $0</button>{/if}
+        </div>
+        {#if mode === 'SANDBOX'}<p class="small muted">The $0 option verifies the Prava iframe and card enrollment only. It never authorizes provider spend or unlocks generation.</p>{/if}
+      {:else if payment.authorization_state === 'FAILED' || payment.authorization_state === 'REVOKED'}
+        <div class="card card-pad section"><StatusBadge status={payment.authorization_state} /><p class="muted">The Prava session failed, expired, or was consumed. Requesting again creates a fresh single-use session on this page.</p><div class="actions"><button class="btn btn-primary" onclick={() => retryAuthorization(false)} disabled={busy}>{busy ? 'Creating session…' : 'Request new $1 session'}</button>{#if mode === 'SANDBOX'}<button class="btn btn-secondary" onclick={() => retryAuthorization(true)} disabled={busy}>Request new $0 test session</button>{/if}</div></div>
+      {:else if payment.authorization_state === 'VERIFIED'}
+        <div class="card card-pad section"><StatusBadge status={payment.authorization_state} tone="success" /><p class="muted">The $0 sandbox iframe completed successfully. This verifies card enrollment only and does not authorize paid generation.</p><button class="btn btn-primary" onclick={() => retryAuthorization(false)} disabled={busy}>Request $1 authorization session</button></div>
+      {:else if payment.checkout && !payment.checkout.simulated}
+        {#key payment.id}
+          <PravaCardForm session={payment.checkout} publishableKey={payment.checkout.publishable_key} onerror={(message) => error = errorMessage(message)} onnewsession={() => retryAuthorization(payment.maximum_amount_minor === 0)} />
+        {/key}
+        <div class="actions"><button class="btn btn-secondary" onclick={pollPayment}>Check authorization</button><button class="btn btn-secondary" onclick={() => retryAuthorization(payment.maximum_amount_minor === 0)} disabled={busy}>{busy ? 'Creating session…' : 'Request fresh session'}</button></div>
+        {#if payment.maximum_amount_minor === 0}<p class="small muted">Verification-only sandbox session · $0.00 · cannot unlock generation</p>{/if}
+      {:else}<div class="card card-pad section"><StatusBadge status={payment.authorization_state} /><p class="muted">{payment.checkout?.simulated ? 'Simulated authorization recorded as demo data. No real card or payment was used.' : 'Authorization recorded. Continue when it is approved.'}</p></div>{/if}
     {:else if step === 7}
       <h2>Ready to launch</h2><p class="lede">The confirmed mandate, selected providers, bounded authorization, retry reserve, and human review trigger will travel with this run.</p>
       <div class="card card-pad section"><div class="check-list"><div class="check" data-status="PASS"><div class="icon"><Check size={16} /></div><div><h3>Mandate confirmed</h3><p>Versioned policy is immutable for this launch.</p></div></div><div class="check" data-status="PASS"><div class="icon"><Check size={16} /></div><div><h3>Provider strategy selected</h3><p>Per-modality models and estimates are recorded.</p></div></div><div class="check" data-status="PASS"><div class="icon"><ShieldCheck size={16} /></div><div><h3>Budget authorization approved</h3><p>Demo authorization only; verification and acceptance remain pending.</p></div></div></div></div>

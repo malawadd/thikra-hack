@@ -22,10 +22,16 @@ class Scene(BaseModel):
 
     model_config = _STRICT
 
-    image_prompt: str = Field(description="A single descriptive sentence for the keyframe image.")
-    motion_prompt: str = Field(description="How that keyframe should animate (camera + subject motion).")
-    narration: str = Field(description="The narration spoken over this scene (1-2 sentences).")
-    caption: str = Field(description="A short on-screen caption (<= 60 chars).")
+    image_prompt: str = Field(
+        max_length=600, description="A single descriptive sentence for the keyframe image."
+    )
+    motion_prompt: str = Field(
+        max_length=400, description="How that keyframe should animate (camera + subject motion)."
+    )
+    narration: str = Field(
+        max_length=240, description="The narration spoken over this scene (1-2 sentences)."
+    )
+    caption: str = Field(max_length=60, description="A short on-screen caption (<= 60 chars).")
     duration_sec: float = Field(ge=4.0, le=12.0, description="Seconds this scene should last.")
 
 
@@ -44,5 +50,5 @@ class StoryboardSpec(BaseModel):
         ),
     )
     music_prompt: str = Field(description="Mood + genre instruction for the background score.")
-    total_duration_sec: float = Field(ge=20.0, le=120.0)
-    scenes: list[Scene] = Field(min_length=4, max_length=6)
+    total_duration_sec: float = Field(ge=15.0, le=30.0)
+    scenes: list[Scene] = Field(min_length=3, max_length=3)

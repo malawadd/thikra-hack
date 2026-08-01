@@ -362,7 +362,9 @@ def compile_brief(db: Session, request: BriefCreate) -> dict:
         claim_constraints=proposal.claim_constraints if proposal else request.claim_constraints,
         attribution_requirements=request.attribution_requirements,
         maximum_retries=request.maximum_retries,
-        retry_budget_minor=min(request.maximum_budget_minor // 4, 500),
+        retry_budget_minor=(
+            0 if request.maximum_retries == 0 else min(request.maximum_budget_minor // 4, 500)
+        ),
         human_review_triggers=[
             "User approval required before final delivery",
             f"Spend at or above {request.human_approval_threshold_minor} minor units",
@@ -451,6 +453,7 @@ def provider_strategy(db: Session, mandate_id: str, selections: dict | None = No
     )
     policy = mandate_schema(version)
     forbidden = set(policy.get("forbidden_providers", []))
+    allowed = set(policy.get("allowed_providers", []))
     matrix = catalog.matrix()
     quotes: list[dict] = []
     selection: dict[str, dict[str, str]] = {}
@@ -460,7 +463,9 @@ def provider_strategy(db: Session, mandate_id: str, selections: dict | None = No
         candidates = []
         for position, entry in enumerate(entries):
             configured = entry["key_available"] or settings.app_mode == "DEMO"
-            compliant = entry["vendor"] not in forbidden
+            compliant = entry["vendor"] not in forbidden and (
+                not allowed or entry["vendor"] in allowed
+            )
             quality = max(55, 91 - position * 5)
             reliability = max(70, 96 - position * 3)
             cost = base_cost[slot] + position * 3

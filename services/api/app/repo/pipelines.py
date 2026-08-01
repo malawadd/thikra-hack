@@ -129,9 +129,9 @@ def compile_mandate_proposal(brief: dict) -> MandateProposal:
 
 _STORYBOARD_INSTRUCTION = (
     "You are a storyboard writer for a short narrated explainer video. "
-    "Given the seed below, produce a JSON storyboard with 4-6 scenes. Each "
+    "Given the seed below, produce a JSON storyboard with exactly 3 scenes. Each "
     "scene's `duration_sec` MUST be exactly 5 or 10 (the video model only "
-    "renders 5s or 10s clips); aim for a 30-60 second total. First pick a "
+    "renders 5s or 10s clips); aim for a 15-30 second total. First pick a "
     "`style_prompt`: "
     "ONE sentence locking the visual look every scene must share "
     '(palette + illustration style + lighting + mood, e.g. "Soft pastel '
