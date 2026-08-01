@@ -1,5 +1,11 @@
 # Composition (Stage C)
 
+> **Thikra extension (2026-08-01):** `composer.py` exposes `probe_media()` so
+> deterministic verification uses ffprobe without creating a second
+> ffmpeg-family subprocess surface. Pillow inspects images; ffprobe inspects
+> streams, resolution, frame rate, and duration. Composition behavior is
+> unchanged.
+
 The final-MP4 step is the only non-Genblaze media surface in this
 sample. It exists because the SDK does not yet ship a composition
 primitive — `genblaze-ffmpeg`, `genblaze-compose`, and `genblaze-video`

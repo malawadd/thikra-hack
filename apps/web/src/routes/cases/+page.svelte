@@ -1,0 +1,10 @@
+<script lang="ts">
+  import { onMount } from 'svelte'; import AlertTriangle from 'lucide-svelte/icons/triangle-alert';
+  import PageHeader from '$lib/components/PageHeader.svelte'; import AsyncState from '$lib/components/AsyncState.svelte'; import StatusBadge from '$lib/components/StatusBadge.svelte'; import { api, shortDate } from '$lib/api/client';
+  let items = $state<any[]>([]); let loading = $state(true); let error = $state(''); let status = $state('');
+  const filtered = $derived(items.filter((item) => !status || item.status === status));
+  onMount(async () => { try { items = (await api<any>('/thikra/cases')).items; } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); } finally { loading = false; } });
+</script>
+<PageHeader eyebrow="Redress operations" title="Cases" description="Investigate failed delivery, payment mismatch, rights risk, deterministic policy violations, and human rejection with an evidence snapshot attached." />
+<div class="card card-pad" style="max-width:300px;margin-bottom:18px"><div class="field"><label for="case-status">Status</label><select id="case-status" bind:value={status}><option value="">All statuses</option><option>OPEN</option><option>INVESTIGATING</option><option>WAITING</option><option>RESOLVED</option></select></div></div>
+<AsyncState {loading} {error} empty={!loading && filtered.length === 0}><div class="card table-wrap"><table><thead><tr><th>Case</th><th>Reason</th><th>Severity</th><th>Owner</th><th>Recommended action</th><th>Status</th></tr></thead><tbody>{#each filtered as item}<tr><td><a href={`/cases/${item.id}`}><strong>Case {item.id.slice(0,8)}</strong></a><div class="small muted">{shortDate(item.created_at)}</div></td><td>{item.reason}</td><td><span class="badge" data-tone={item.severity === 'HIGH' || item.severity === 'CRITICAL' ? 'danger' : 'warning'}><AlertTriangle size={12} /> {item.severity}</span></td><td>{item.owner}</td><td>{item.recommended_next_action}</td><td><StatusBadge status={item.status} /></td></tr>{/each}</tbody></table></div></AsyncState>

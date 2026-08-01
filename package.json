@@ -1,19 +1,21 @@
 {
-  "name": "genblaze-gen-media-multi-provider-sample",
+  "name": "thikra",
   "private": true,
   "scripts": {
-    "setup": "pnpm install && pnpm setup:api",
-    "setup:api": "cd services/api && uv venv && uv pip install -r requirements.txt",
+    "setup": "node scripts/setup.mjs",
+    "setup:api": "node scripts/setup-api.mjs",
     "dev": "concurrently --names web,api --prefix-colors blue,green \"pnpm dev:web\" \"pnpm dev:api\"",
-    "dev:web": "pnpm --filter @genblaze-gen-media-multi-provider-sample/web dev",
-    "dev:api": "cd services/api && uv run uvicorn app.main:app --reload --port 8000",
-    "build": "pnpm --filter @genblaze-gen-media-multi-provider-sample/web build",
-    "lint": "pnpm --filter @genblaze-gen-media-multi-provider-sample/web lint",
-    "lint:api": "cd services/api && uv run ruff check .",
-    "test": "pnpm test:api",
-    "test:api": "cd services/api && uv run pytest",
-    "typecheck": "pnpm --filter @genblaze-gen-media-multi-provider-sample/web typecheck",
-    "check:structure": "cd services/api && uv run pytest tests/test_structure.py -v"
+    "dev:web": "pnpm --filter @thikra/web dev",
+    "dev:api": "node scripts/run-api.mjs",
+    "build": "pnpm --filter @thikra/web build",
+    "lint": "pnpm --filter @thikra/web lint && pnpm lint:api",
+    "lint:api": "node scripts/api-command.mjs ruff check .",
+    "test": "pnpm test:api && pnpm test:web",
+    "test:api": "node scripts/api-command.mjs pytest",
+    "test:web": "pnpm --filter @thikra/web test",
+    "test:e2e": "pnpm --filter @thikra/web test:e2e",
+    "typecheck": "pnpm --filter @thikra/web typecheck",
+    "check:structure": "node scripts/check-structure.mjs && node scripts/api-command.mjs pytest tests/test_structure.py -v"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

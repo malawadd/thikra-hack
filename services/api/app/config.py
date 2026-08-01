@@ -13,6 +13,20 @@ _ROOT_ENV = Path(__file__).resolve().parents[3] / ".env"
 
 
 class Settings(BaseSettings):
+    # --- Thikra application mode + persistence ---
+    app_mode: str = "DEMO"
+    database_url: str = "sqlite:///./thikra.db"
+    thikra_data_dir: str = ".thikra"
+    public_web_url: str = "http://localhost:43191"
+    session_secret: str = "demo-only-change-me"
+    max_generation_concurrency: int = 3
+    max_run_duration_sec: int = 1800
+
+    # --- Prava ---
+    prava_backend_url: str = "https://sandbox.api.prava.space"
+    prava_publishable_key: str = ""
+    prava_secret_key: str = ""
+
     # --- Backblaze B2 (parent-standard names; do not rename) ---
     # No `b2_endpoint`: `S3StorageBackend.for_backblaze()` derives the endpoint
     # from `region`. Keeping the field would mislead readers into thinking the

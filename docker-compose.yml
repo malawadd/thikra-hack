@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: thikra
+      POSTGRES_USER: thikra
+      POSTGRES_PASSWORD: thikra-local
+    volumes:
+      - thikra-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thikra"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://thikra:thikra-local@db:5432/thikra
+      APP_MODE: ${APP_MODE:-DEMO}
+      PUBLIC_WEB_URL: http://localhost:43191
+      API_CORS_ORIGINS: http://localhost:43191
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "43192:43192"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:43192/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      API_INTERNAL_URL: http://api:43192
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "43191:43191"
+volumes:
+  thikra-db:

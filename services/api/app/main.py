@@ -45,6 +45,10 @@ from app.repo import (  # noqa: E402
 )
 from app.repo import provider_catalog as catalog  # noqa: E402
 from app.repo.composer import compose_final  # noqa: E402
+from app.thikra import initialize_database  # noqa: E402
+from app.thikra import router as thikra_router  # noqa: E402
+from app.thikra.database import SessionLocal  # noqa: E402
+from app.thikra.service import seed_database  # noqa: E402
 from app.types.api import MediaRequest, PromptRequest, ProviderChoice  # noqa: E402
 
 setup_logging(settings.log_level)
@@ -54,9 +58,9 @@ logger = logging.getLogger("api.main")
 # --- App -------------------------------------------------------------------
 
 app = FastAPI(
-    title="genblaze-gen-media-multi-provider-sample",
-    description="One prompt → narrated, scored, captioned MP4. OpenAI + NVIDIA + Decart + GMICloud + B2.",
-    version="0.1.0",
+    title="Thikra — Verify-Then-Pay Creative Commerce",
+    description="Mandate-aware creative procurement with bounded payment, Genblaze orchestration, B2 provenance, layered verification, and redress.",
+    version="1.0.0",
 )
 # Explicit origins via env (production), plus a regex that catches any
 # localhost port so Next falling back to :3001/:3002 etc. doesn't break
@@ -64,11 +68,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=r"https?://localhost(:\d+)?",
+    allow_origin_regex=(None if settings.app_mode.upper() == "PRODUCTION" else r"https?://localhost(:\d+)?"),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+app.include_router(thikra_router)
 
 
 @app.middleware("http")
@@ -110,7 +115,21 @@ async def _log_startup() -> None:
     differ from `.env.example` defaults), so config drift is visible
     in the logs immediately.
     """
+    if settings.app_mode.upper() == "PRODUCTION":
+        required = {
+            "SESSION_SECRET": settings.session_secret != "demo-only-change-me",
+            "PRAVA_SECRET_KEY": bool(settings.prava_secret_key),
+            "PRAVA_PUBLISHABLE_KEY": bool(settings.prava_publishable_key),
+            "B2_BUCKET_NAME": bool(settings.b2_bucket_name),
+        }
+        missing = [name for name, valid in required.items() if not valid]
+        if missing:
+            raise RuntimeError(f"Production configuration is incomplete: {', '.join(missing)}")
+    initialize_database()
+    with SessionLocal() as db:
+        seed_database(db)
     logger.info("api startup", extra={
+        "app_mode": settings.app_mode.upper(),
         "b2_region": settings.b2_region,
         "b2_bucket": settings.b2_bucket_name,
         "chat_model": settings.chat_model,

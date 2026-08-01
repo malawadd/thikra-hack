@@ -14,6 +14,7 @@ no `ffmpeg-python` dependency layer. Call from `main.py` through
 """
 
 import hashlib
+import json
 import logging
 import re
 import shutil
@@ -32,10 +33,16 @@ from app.repo.pipelines import PREFIX, backend
 from app.types.storyboard import StoryboardSpec
 
 logger = logging.getLogger("api.composer")
-
 _FFMPEG_TIMEOUT_SEC = 300
 
-
+def probe_media(path: Path) -> dict:
+    """Return ffprobe JSON; all ffmpeg-family subprocesses stay in this module."""
+    if shutil.which("ffprobe") is None:
+        raise RuntimeError("ffprobe binary not found on PATH")
+    result = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)], timeout=30, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(f"ffprobe could not read {path.name}: {result.stderr.strip()}")
+    return json.loads(result.stdout)
 # --- Scene grouping ---------------------------------------------------------
 
 @dataclass

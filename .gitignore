@@ -2,13 +2,17 @@
 .env
 .env.local
 .env.*.local
+*.env
 
 # Node
 node_modules/
 .next/
+.svelte-kit/
 .turbo/
 dist/
 build/
+test-results/
+playwright-report/
 *.tsbuildinfo
 next-env.d.ts
 
@@ -21,6 +25,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+services/api/thikra.db
+services/api/.thikra/
 
 # Caches
 .cache/

@@ -4,11 +4,11 @@
 // the ones OUR backend actually exposes.
 //
 // The backend host comes from NEXT_PUBLIC_API_URL — set it in
-// apps/web/.env.local (defaults to http://localhost:8000 for dev).
+// apps/web/.env.local (defaults to http://localhost:43192 for dev).
 // CORS is configured on the FastAPI side via API_CORS_ORIGINS.
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:43192";
 
 /** One key under explainers/<run-id>/... in B2. */
 export interface FileMetadata {

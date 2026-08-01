@@ -1,0 +1,14 @@
+import js from '@eslint/js';
+import svelte from 'eslint-plugin-svelte';
+import tseslint from 'typescript-eslint';
+import globals from 'globals';
+
+export default tseslint.config(
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  ...svelte.configs['flat/recommended'],
+  { ignores: ['.svelte-kit/**', '.next/**', 'build/**', 'node_modules/**', 'playwright-report/**', 'test-results/**', 'static/**'] },
+  { files: ['**/*.{js,ts,svelte}'], languageOptions: { globals: { ...globals.browser, ...globals.node } } },
+  { files: ['**/*.svelte'], languageOptions: { parserOptions: { parser: tseslint.parser } } },
+  { rules: { '@typescript-eslint/no-explicit-any': 'off', 'svelte/no-navigation-without-resolve': 'off', 'svelte/require-each-key': 'off' } }
+);

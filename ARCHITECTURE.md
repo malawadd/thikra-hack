@@ -1,271 +1,98 @@
-# Architecture
+# Thikra architecture
 
-## Layer diagram
+FastAPI owns policy and state. SvelteKit is a same-origin presentation/BFF layer and never receives server secrets. Existing Genblaze catalog, pipeline, storage sink, lineage, and ffmpeg composition code remain the media execution path.
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ apps/web — Next.js App Router (React 19)                             │
-│                                                                      │
-│  studio-page.tsx ──► PipelineCanvas (Seed→Script→Storyboard→Media→   │
-│             Composition tiles) + InspectorDrawer + RunErrorPanel +   │
-│             ReadinessNotice; HealthBanner in the layout              │
-│  lib/sse-client.ts ──► raw-fetch SSE parser (POST + stream)          │
-│  lib/api-client.ts ──► typed helpers + ApiError; routes via API_BASE │
-└────────────────────────────────┬─────────────────────────────────────┘
-                                 │ /api/proxy/<path>
-                                 ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│ services/api — FastAPI                                               │
-│                                                                      │
-│  main.py        endpoints; returns Genblaze Run / Asset directly     │
-│  config.py      pydantic-settings; B2_* + provider keys              │
-│  types/         StoryboardSpec + request DTOs only                   │
-│                                                                      │
-│  repo/                                                               │
-│    provider_catalog.py — ONLY file importing genblaze provider       │
-│                   classes; CatalogEntry per (slot, vendor) + quirks  │
-│    pipelines.py — resolves CatalogEntry.make(); imports only         │
-│                   `chat()` (Stage A) + genblaze_core/Pipeline        │
-│    composer.py  — ffmpeg orchestration (genblaze_core types only)    │
-│                                                                      │
-│  tests/                                                              │
-│    test_structure.py — AST scan for boto3 / provider imports         │
-│    test_pipelines_smoke.py — factory smoke tests (B1 + B2)           │
-│    test_composer.py — mocked B2 + ffmpeg arg-shape tests             │
-└────────────────────┬─────────────────────────────────┬───────────────┘
-                     │ chat() + Pipeline.step(...)     │ subprocess.run(ffmpeg, ...)
-                     ▼                                 │
-┌──────────────────────────────────────────────────┐   │
-│ genblaze-core + provider packages (PyPI)         │   │
-│   genblaze-core>=0.3.4, genblaze-s3,             │   │
-│   openai, google, decart, nvidia, gmicloud,      │   │
-│   replicate, runway, luma, elevenlabs, lmnt, hume│   │
-└──────────────┬───────────────────────────────────┘   │
-               │                                       │
-               ▼                                       ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│ Backblaze B2 — `explainers/<run-id>/*`                               │
-│   storyboard.json, scene_N.png, scene_N.mp4, scene_N_voice.wav,      │
-│   music.wav, manifest.json, final.mp4                                │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    U["User or Brand Manager"] --> B["Creative Brief"]
+    B --> M["Mandate Compiler"]
+    M --> C["Confirmed Creative Mandate"]
+    C --> A["Thikra Procurement Agent"]
+    A --> D["Provider Discovery and Routing"]
+    D --> P["Prava Authorization and Payment State"]
+    P --> G["Genblaze Orchestrator"]
+    G --> I["Image Providers"]
+    G --> V["Video Providers"]
+    G --> T["Voice Providers"]
+    G --> S["Music Providers"]
+    I --> B2["Backblaze B2"]
+    V --> B2
+    T --> B2
+    S --> B2
+    B2 --> E["Verification Engine"]
+    E --> F["Deterministic File Checks"]
+    E --> L["Language and Audio Checks"]
+    E --> X["Multimodal Semantic Checks"]
+    E --> R["Rights and Provenance Checks"]
+    F --> DEC{"Acceptable Delivery?"}
+    L --> DEC
+    X --> DEC
+    R --> DEC
+    DEC -->|"Retry permitted"| G
+    DEC -->|"Uncertain"| H["Human Review"]
+    DEC -->|"Pass"| FIN["Final Delivery"]
+    DEC -->|"Reject"| CASE["Redress Case"]
+    H -->|"Approve"| FIN
+    H -->|"Retry"| G
+    H -->|"Reject"| CASE
+    FIN --> AUD["Audit and Evidence Graph"]
+    CASE --> AUD
 ```
 
-The shape on the wire is **2 Pipelines + 1 ffmpeg compose**, plus one
-standalone `chat()` function call for storyboard planning. There is no
-Stage A Pipeline.
-
-## Stages
-
-### A — Storyboard planning (function, not a Pipeline)
-
-- **Surface:** `genblaze_openai.chat()` — a standalone function exported
-  from `genblaze_openai.__init__`. It does NOT implement the
-  `BaseProvider` interface, so it cannot be passed to `Pipeline.step()`.
-- **Idiom:** `chat(model, prompt=…, response_format=StoryboardSpec, api_key=…)`.
-  `response_format` accepts a Pydantic `BaseModel` class directly — the
-  function calls `coerce_response_format()` internally and the OpenAI
-  endpoint enforces the JSON schema.
-- **Persistence:** the storyboard JSON is written by hand to
-  `explainers/<uuid>/storyboard.json` via `backend().put(...)` (there's
-  no Pipeline Manifest covering this step).
-- **Why a function and not a class:** see `docs/features/prompt-to-storyboard.md`.
-  Filed as Genblaze SDK feedback.
-
-### B1 — Keyframe fan-out
-
-- **Pipeline:** `Pipeline("genblaze-gen-media-multi-provider-sample", max_concurrency=3)`.
-  Stands alone — no `from_result()` anchor, because Stage A is not a Pipeline.
-- **Provider:** the run's selected image vendor (`selection.image`), resolved
-  from the catalog — default Replicate (`black-forest-labs/flux-schnell`);
-  Google Imagen / DALL·E / NVIDIA / Decart also available. Stage B0 generates
-  one reference image first; B1 fans out one keyframe per scene, prefixing the
-  shared `style_prompt` so the scenes rhyme visually (generate-only providers
-  get consistency from the prompt, not image conditioning).
-- **Output:** one PNG per scene. The Stage B1 Manifest is the lineage
-  root for the visual track in B2.
-
-### B2 — Image-to-video + TTS + music
-
-- **Pipeline:** `.from_result(stage_b1).max_concurrency=3`. The
-  `from_result()` call records B1's `run_id` as the Stage B2 Manifest's
-  `parent_run_id`, preserving B1 → B2 lineage in B2.
-- **Cross-pipeline image handoff:** the keyframe asset URL is presigned via
-  `S3StorageBackend.get_url(...)` and handed to the selected video provider per
-  its `image_handoff` — `external_inputs=[Asset(...)]` for almost everyone
-  (Replicate default, Runway, Luma, Kling, Veo, Sora) or the legacy `image=`
-  kwarg for Decart. `from_result()` only records lineage in 0.3.x — it does
-  NOT hydrate prior assets into provider kwargs.
-- **Per scene:** one video step (`selection.video`) + one TTS step
-  (`selection.tts`).
-- **Once at the end:** one music step (`selection.music`) for the bed.
-- **Output (Stage B2 Run):** `(video, narration) × N + (music,)` — the
-  composer relies on this ordering when grouping scenes.
-
-### C — Composition (NOT a Genblaze pipeline)
-
-- **Module:** `app/repo/composer.py`
-- **Why outside Genblaze:** no `genblaze-compose` / `genblaze-ffmpeg`
-  package exists on PyPI as of 2026-05-28 (all 404). Filed as the
-  primary SDK gap.
-- **Steps:** concat per-scene visuals (resolution-normalizing `concat`
-  filter) → mix **available** narration + ducked music (`amix` + `adelay`)
-  → finalize captions (burn via the `subtitles`/libass filter when present,
-  else soft `mov_text` track, else none) → embed Stage B2 Manifest via
-  `Mp4Handler` (best-effort) → upload to B2 at `explainers/<run-id>/final.mp4`.
-- **Every track is best-effort.** `compose_final(b2_run, b1_run, spec)`
-  takes both the B2 result and the B1 keyframe result and returns
-  `(Asset, notices)`; the notices become `notice` SSE frames.
-  - *Video:* a failed Decart clip falls back to the scene's Stage B1
-    keyframe still, looped to the scene duration (`-loop 1 -t`) and scaled to
-    the common canvas so it concats cleanly with real clips. A scene is only
-    fatal (raises → `error` frame) when BOTH its clip and keyframe are missing.
-  - *Narration / music:* a failed/assetless audio step is mixed as silence
-    or dropped; with no audio at all the final MP4 is silent (`-an`).
-  - *Captions:* burned via the `subtitles` (libass) filter when the ffmpeg
-    build has it, else muxed as a soft `mov_text` track, else omitted — a
-    libass-less ffmpeg degrades instead of failing Stage C.
-- **Execution:** `subprocess.run(["ffmpeg", ...], timeout=300, check=True)`,
-  called from `main.py` via `await asyncio.to_thread(compose_final, ...)`
-  inside an `async def` SSE generator. Stages B1 and B2 themselves run
-  through `Pipeline.astream()` (native async), so the event loop is never
-  blocked on provider HTTP between events either. No `ffmpeg-python`
-  dependency.
-
-### Why some endpoints are sync `def`
-
-Endpoints that make a **blocking B2 call** — `/health` (`probe_storage`),
-`/files`, `/runs/{id}/assets`, `/assets/{key}` — and `/runs/storyboard`
-(blocking OpenAI + B2) are plain `def`, so Starlette runs them in its
-threadpool. A blocking call inside an `async def` runs on the event loop, and
-one stall there freezes the **entire** API (every endpoint, incl. built-in
-`/docs`). Only `/runs/media/stream`'s generator is `async` — it `await`s and
-offloads ffmpeg via `asyncio.to_thread`. The structural test
-`test_blocking_b2_endpoints_are_sync_def` guards this invariant.
-
-`/assets/{key}` 302-redirects to a presigned B2 URL by default; media tiles
-load these via `<img>`/`<video>` `src` (not CORS-gated). The manifest viewer
-uses `fetch()`, which follows the 302 into B2's cross-origin presigned URL and
-is then blocked (B2 sets no `Access-Control-Allow-Origin`), so it requests
-`?inline=1` — the endpoint proxies the JSON bytes through FastAPI (same-origin,
-CORS-allowed). Reserve `inline=1` for small artifacts; large media stay on the
-redirect path.
-
-## Ethos constraints
-
-1. **Provider-class imports confined to `app/repo/provider_catalog.py`**
-   (`pipelines.py` imports only `genblaze_openai.chat` + `genblaze_core`;
-   `composer.py` only `Asset`/`Manifest`/`Mp4Handler` types). Tested
-   (`test_genblaze_provider_imports_confined`).
-2. **No `boto3` / `botocore`.** Tested.
-3. **FastAPI handlers return Genblaze models directly** — no DTO wrappers.
-4. **`S3StorageBackend.for_backblaze(...)` called with explicit
-   `key_id=` / `app_key=` kwargs** so the library's `B2_APP_KEY` env
-   fallback never fires (parent-standard names: `B2_KEY_ID`,
-   `B2_APPLICATION_KEY`).
-5. **`preflight=True`** on the essential pipelines (B0/B1) — bad keys
-   fail fast before any paid call. **Stage B2 sets `preflight=False`** and
-   the caller runs it `fail_fast=False, raise_on_failure=False`: video,
-   narration, and music are all best-effort, so a DEAD/failing model is
-   contained as a single FAILED step rather than aborting the run at
-   preflight (which validates *every* step). A FAILED best-effort run emits
-   `PipelineFailedEvent` (not `PipelineCompletedEvent`); `_stream_stage`
-   captures the result from **both** terminal events so the composer still
-   sees every succeeded asset and degrades the rest.
-6. **One Pipeline slug** (`genblaze-gen-media-multi-provider-sample`)
-   across Stages B1 + B2 — Manifests differentiate via `parent_run_id`.
-
-## SSE wire format
-
-`POST /runs/media/stream` returns `text/event-stream`. Each frame is a
-single `data: <json>\n\n` line. The JSON payload is one of:
-
-```jsonc
-// Stage boundary
-{ "kind": "stage.start", "stage": "B1.keyframes" }
-{ "kind": "stage.complete", "stage": "B1.keyframes" }
-
-// Per-event from the underlying Pipeline.astream()
-{ "kind": "stream", "stage": "B1.keyframes",
-  "event": { "type": "step.completed", "step_id": "...", "provider": "openai", ... } }
-
-// Synthetic per-asset frame — emitted alongside every step.completed
-// because StepCompletedEvent.step is `exclude=True` in genblaze-core,
-// so the wire JSON never carries the asset list. `asset_url` is a
-// durable B2 URL; the frontend routes it through `/assets/{key}` for playback.
-{ "kind": "scene.asset", "stage": "B2.media", "step_index": 0,
-  "asset_url": "https://s3.<region>.backblazeb2.com/<bucket>/explainers/<run-id>/...",
-  "media_type": "video/mp4" }
-
-// Final
-{ "kind": "compose.complete",
-  "asset": { "url": "https://...", "media_type": "video/mp4", "sha256": "..." },
-  "spec": { /* StoryboardSpec */ },
-  "run_id": "..." }
-
-// Best-effort degradation (narration/music unavailable) — a WARNING, not a
-// failure. The run still completes with a final MP4. Emitted just before
-// compose.complete, one per fallen-back track.
-{ "kind": "notice", "stage": "B2.media", "message": "Background music unavailable — final video has no score." }
-
-// Anywhere — a fatal failure. `code` / `retryable` / `hint` come from the
-// backend classifier (app/errors.py): `code` is the SDK `ProviderErrorCode`
-// (or "ffmpeg_missing" / "unknown"), `retryable` gates the UI's Retry action,
-// `hint` is the next step. `message` is a clean one-liner — never a traceback.
-// (Live per-step failures are NOT a separate frame: they ride the SDK's own
-// `step.failed` / failed `step.completed` events inside `stream` frames.)
-{ "kind": "error", "stage": "C.compose", "code": "ffmpeg_missing",
-  "retryable": false, "message": "ffmpeg is not installed on the API host.",
-  "hint": "Install ffmpeg (see infra/README.md). Your generated assets are saved in B2." }
+```mermaid
+sequenceDiagram
+    actor User
+    participant Web as SvelteKit
+    participant API as FastAPI
+    participant Prava
+    participant Genblaze
+    participant Provider
+    participant B2
+    participant Verify as Verification Engine
+    User->>Web: Submit creative brief and budget
+    Web->>API: Compile mandate
+    API-->>Web: Structured proposed mandate
+    User->>Web: Confirm mandate
+    Web->>API: Request provider strategy
+    API-->>Web: Quotes and provider decision
+    Web->>API: Create bounded authorization
+    API->>Prava: Create sandbox session
+    Prava-->>Web: Secure iframe approval flow
+    User->>Prava: Approve with documented authentication
+    Web->>API: Poll authorization result
+    API->>Genblaze: Start accountable generation
+    Genblaze->>Provider: Generate media
+    Provider-->>Genblaze: Generated output
+    Genblaze->>B2: Store assets and manifests
+    Genblaze-->>API: Pipeline events
+    API-->>Web: SSE progress
+    API->>Verify: Evaluate stored delivery
+    Verify->>B2: Read assets and metadata
+    Verify-->>API: Pass, fail, warning, or review
+    API-->>Web: Verification result
+    User->>Web: Approve, retry, or reject
+    Web->>API: Final decision
+    API->>B2: Store evidence export
+    API-->>Web: Completed run
 ```
 
-The frontend's `streamSse()` helper (in `lib/sse-client.ts`) parses
-these into a typed `SseFrame` union; `studio-page.tsx` accumulates them into
-the `InspectorDrawer` log and into the per-scene `SceneSlots` the
-`PipelineCanvas` tiles render.
+## Boundaries
 
-## Why `composer.py` lives in `repo/`
+- `app/repo/provider_catalog.py` is the only provider-class import surface.
+- `app/repo/pipelines.py` builds B0 reference, B1 keyframes, and best-effort B2 media and owns standalone OpenAI structured output.
+- `app/repo/composer.py` is the only ffmpeg/ffprobe subprocess surface.
+- `app/thikra/orchestration.py` resolves catalog entries, executes the preserved pipeline, attaches Thikra context, persists asset records, and starts verification.
+- `app/thikra/storage.py` is the sole adapter for non-media JSON evidence; media goes through Genblaze's B2 sink.
+- `app/thikra/api.py` exposes typed operations; domain decisions live in services/state policy rather than Svelte.
 
-The composer is storage-adjacent infrastructure: it downloads source
-assets from B2 via the same `S3StorageBackend` instance the pipelines
-use, and uploads the final MP4 back to the same prefix. Putting it
-under `services/api/app/repo/` keeps "I/O against B2" centralized and
-makes its `Mp4Handler` + `Asset` imports the only `genblaze_core`
-imports outside `pipelines.py` — easy to audit, easy to grep.
+## State and money
 
-It would move into a hypothetical `genblaze-compose` package the day
-one ships.
+Generation transitions are explicit and invalid changes return stable 409 errors. The confirmed mandate and authorized amount cap every retry. Money is integer minor units plus ISO currency; authorization, invocation, delivery, verification, acceptance, and redress remain separate fields/events.
 
-## Failure-mode policy
+## Audit integrity
 
-All failures are **classified** by `app/errors.py` (`classify()` — typed off
-the SDK's `ProviderErrorCode` + `RETRYABLE_ERROR_CODES`, with a substring
-fallback only for ffmpeg) into `{code, retryable, message, hint}`. Stage A
-returns that as the HTTP error body; the streamed stages put it on the `error`
-frame. The frontend renders a persistent `RunErrorPanel` (Retry — when
-`retryable` — / Edit storyboard / Start over) and keeps the partial storyboard
-+ media tiles visible. A pre-flight `ReadinessNotice` warns (never blocks) on
-missing keys / ffmpeg from `/health`.
+Each event hashes canonical JSON plus the previous hash. UTC normalization keeps the chain stable across SQLite (which strips timezone metadata) and PostgreSQL. Exports contain mandate versions, provider decision, payment references, assets/hashes, evaluations, events, and cases, but never one-time credentials or model chain-of-thought.
 
-- **Stage A fails** → classified HTTP error (e.g. 401 auth, 429 rate-limit,
-  502 provider); no B2 writes happened yet (Stage A persists storyboard.json
-  only after a successful `chat()` + `model_validate_json()` round-trip).
-  Recovery: Retry re-runs the storyboard from the seed prompt.
-- **Stage B1 fails partway** → keyframes that completed are durable in
-  B2 (sink writes as steps finish). The SSE stream emits an `error`
-  frame; the UI shows what landed plus the error banner.
-- **Stage B2 fails partway (video, narration, and/or music)** → contained,
-  NOT fatal. Because B2 runs `preflight=False, fail_fast=False,
-  raise_on_failure=False`, a DEAD/failing model becomes a single FAILED step
-  and the run still returns a result (via `PipelineFailedEvent`). The
-  composer degrades: a failed video clip falls back to the scene's keyframe
-  still; failed audio is mixed as silence/dropped. Each fallback emits a
-  `notice` frame. The only hard failure here is a scene that lost BOTH its
-  clip and its keyframe (nothing to show) → `error` frame.
-- **Stage C fails** → all source assets are durable in B2 under the
-  Stage B2 run prefix. The user re-runs `/runs/media/stream` (which
-  re-fires providers); there is no compose-only retry endpoint in the
-  current shape.
-- **Essential stages fail loud.** Stages A/B0/B1 surface every provider
-  error and keep `preflight=True`, so a misconfigured key fails before any
-  paid call fires. Best-effort suppression applies only inside Stage B2 +
-  the composer.
+## Modes and failure policy
+
+DEMO materializes labeled fixtures. SANDBOX runs real configured Prava and Genblaze/B2 integrations. PRODUCTION performs startup validation and uses explicit CORS origins. Essential B0/B1 preflight remains enabled; B2 stays best-effort. Missing video can fall back to a keyframe, missing audio becomes a warning, but missing all visuals fails. Low confidence, rights uncertainty, policy thresholds, or explicit mandate rules produce human review.

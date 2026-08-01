@@ -1,5 +1,12 @@
 # Media generation
 
+> **Thikra extension (2026-08-01):** outside DEMO,
+> `app/thikra/orchestration.py` executes this catalog-driven B0/B1/B2 path
+> after mandate, provider, and authorization checks. Confirmed planned-scene
+> prompts replace storyboard image/narration prompts before paid calls. OpenAI
+> structured output also extracts semantic mandate fields; user-authored
+> budget, provider, rights, and approval limits remain authoritative.
+
 Stage B0 generates one reference image; Stage B1 generates one keyframe per
 scene; Stage B2 turns each keyframe into a short video clip, narrates it, and
 lays a music bed underneath.

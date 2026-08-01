@@ -24,9 +24,10 @@ the meantime. Do not add a side-channel client.
 
 ### Rule 2: never wrap Genblaze response types
 
-FastAPI handlers return `Run`, `Step`, `Asset`, `Manifest` instances
-directly. The only custom DTOs in this codebase are request bodies
-(`PromptRequest`, `MediaRequest`). If you need a field a Genblaze
+The preserved Genblaze handlers return `Run`, `Step`, `Asset`, `Manifest`
+instances directly. Thikra may define business schemas (mandates, payments,
+cases), but must never mirror or wrap a Genblaze response type. If you need a
+field a Genblaze
 model doesn't have, file SDK feedback — don't shadow the type with a
 mirrored Pydantic class.
 
@@ -141,6 +142,13 @@ or `docs/features/composition.md` in the same change. If you touch
 `composer.py`, update `docs/features/composition.md`. The structural
 tests do not catch doc drift; reviewers do.
 
+### Rule 10: SvelteKit is the only active frontend
+
+`apps/web` uses Svelte 5 and same-origin `/api` BFF routes. Do not import React,
+Next.js, provider SDKs, storage SDKs, or private environment variables there.
+The archived `reference/next-web` is excluded from workspace commands and may
+be consulted only as migration history. `pnpm check:structure` enforces this.
+
 ## Test commands
 
 ```bash
@@ -149,6 +157,9 @@ cd services/api && uv run pytest tests/ -x
 
 # Frontend type-check
 cd apps/web && pnpm typecheck
+
+# Whole application
+pnpm lint && pnpm test && pnpm build && pnpm check:structure
 ```
 
 Always run the structural tests before opening a PR; they're cheap.
