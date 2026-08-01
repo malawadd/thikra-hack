@@ -23,11 +23,11 @@ from genblaze_core.models.enums import RETRYABLE_ERROR_CODES, ProviderErrorCode
 class ClassifiedError:
     """A failure rendered for humans + a machine `code` the UI branches on."""
 
-    code: str          # ProviderErrorCode value | "ffmpeg_missing" | "unknown"
-    retryable: bool    # whether a plain re-run might succeed
-    message: str       # clean one-liner — never an Exception repr / traceback
-    hint: str          # the next action the UI shows under the message
-    status: int        # HTTP status for the Stage-A endpoint
+    code: str  # ProviderErrorCode value | "ffmpeg_missing" | "unknown"
+    retryable: bool  # whether a plain re-run might succeed
+    message: str  # clean one-liner — never an Exception repr / traceback
+    hint: str  # the next action the UI shows under the message
+    status: int  # HTTP status for the Stage-A endpoint
 
     def as_dict(self) -> dict:
         return asdict(self)

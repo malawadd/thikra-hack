@@ -35,16 +35,23 @@ def test_selection_defaults_to_simplest_path() -> None:
     with `model=None` meaning 'use the catalog default for that vendor'."""
     sel = MediaRequest(prompt="seed prompt").selection
     assert sel == Selection()
-    assert (sel.chat.vendor, sel.image.vendor, sel.video.vendor,
-            sel.tts.vendor, sel.music.vendor) == (
-        "openai", "replicate", "replicate", "openai", "replicate")
+    assert (
+        sel.chat.vendor,
+        sel.image.vendor,
+        sel.video.vendor,
+        sel.tts.vendor,
+        sel.music.vendor,
+    ) == ("openai", "replicate", "replicate", "openai", "replicate")
     assert all(c.model is None for c in (sel.chat, sel.image, sel.video, sel.tts, sel.music))
 
 
 def test_selection_accepts_explicit_vendor_and_model() -> None:
-    req = MediaRequest(prompt="seed prompt", selection={
-        "video": {"vendor": "runway", "model": "gen4_turbo"},
-    })
+    req = MediaRequest(
+        prompt="seed prompt",
+        selection={
+            "video": {"vendor": "runway", "model": "gen4_turbo"},
+        },
+    )
     assert req.selection.video.vendor == "runway"
     assert req.selection.video.model == "gen4_turbo"
     # Unspecified slots still fall back to the simplest-path defaults.

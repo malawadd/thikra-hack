@@ -40,8 +40,13 @@ def _make_spec(n: int = 3) -> StoryboardSpec:
         music_prompt="upbeat acoustic",
         total_duration_sec=float(n * 8),
         scenes=[
-            Scene(image_prompt=f"i{i}", motion_prompt="m", narration=f"n{i}",
-                  caption=f"c{i}", duration_sec=8.0)
+            Scene(
+                image_prompt=f"i{i}",
+                motion_prompt="m",
+                narration=f"n{i}",
+                caption=f"c{i}",
+                duration_sec=8.0,
+            )
             for i in range(n)
         ],
     )
@@ -53,7 +58,8 @@ def _step(url: str | None):
 
 
 def _make_b2_run(
-    n: int = 3, *,
+    n: int = 3,
+    *,
     video_scenes: set[int] | None = None,
     narration_scenes: set[int] | None = None,
     music: bool = True,
@@ -108,11 +114,13 @@ def _run_compose(b2_run, spec, b1_run=None, *, has_subtitles=True):
         Path(args[-1]).write_bytes(b"x")
 
     filters = frozenset({"subtitles"}) if has_subtitles else frozenset()
-    with patch.object(composer, "backend", return_value=fake), \
-         patch.object(composer, "_run_ffmpeg", side_effect=_fake_ffmpeg), \
-         patch.object(composer, "_available_filters", return_value=filters), \
-         patch.object(composer.shutil, "which", return_value="/usr/bin/ffmpeg"), \
-         patch.object(composer.Mp4Handler, "embed", return_value=None):
+    with (
+        patch.object(composer, "backend", return_value=fake),
+        patch.object(composer, "_run_ffmpeg", side_effect=_fake_ffmpeg),
+        patch.object(composer, "_available_filters", return_value=filters),
+        patch.object(composer.shutil, "which", return_value="/usr/bin/ffmpeg"),
+        patch.object(composer.Mp4Handler, "embed", return_value=None),
+    ):
         asset, notices = composer.compose_final(b2_run, b1_run, spec)
     return asset, notices, calls
 
@@ -169,12 +177,14 @@ def test_group_scenes_falls_back_to_keyframe_when_video_missing(tmp_path: Path) 
 def test_group_scenes_raises_when_video_and_keyframe_both_missing(tmp_path: Path) -> None:
     """Only when a scene has neither a clip nor a keyframe is it fatal."""
     spec = _make_spec(3)
-    b2_run = _make_b2_run(3, video_scenes={0, 1})       # scene 2 video failed
-    b1_run = _make_b1_run(3, keyframe_scenes={0, 1})    # scene 2 keyframe also missing
+    b2_run = _make_b2_run(3, video_scenes={0, 1})  # scene 2 video failed
+    b1_run = _make_b1_run(3, keyframe_scenes={0, 1})  # scene 2 keyframe also missing
     fake = MagicMock()
     fake.get.side_effect = lambda key: b"fake-bytes"
-    with patch.object(composer, "backend", return_value=fake), \
-         pytest.raises(RuntimeError, match="scene 2: no video clip and no keyframe"):
+    with (
+        patch.object(composer, "backend", return_value=fake),
+        pytest.raises(RuntimeError, match="scene 2: no video clip and no keyframe"),
+    ):
         composer._group_scenes(b2_run, b1_run, spec, tmp_path)
 
 
@@ -203,8 +213,8 @@ def test_compose_final_music_unavailable_mixes_narration_only() -> None:
     assert any("music unavailable" in n.lower() for n in notices)
     assert not any("narration unavailable" in n.lower() for n in notices)
     mix = _filter_for(calls, "mix-audio")
-    assert "[mus]" not in mix          # music absent
-    assert "amix=inputs=3" in mix      # three narration tracks only
+    assert "[mus]" not in mix  # music absent
+    assert "amix=inputs=3" in mix  # three narration tracks only
     assert asset.media_type == "video/mp4"
 
 
@@ -215,8 +225,8 @@ def test_compose_final_music_only_when_all_narration_failed() -> None:
 
     assert any("narration unavailable" in n.lower() for n in notices)
     mix = _filter_for(calls, "mix-audio")
-    assert "[v" not in mix             # no narration tracks
-    assert "volume=0dB[mus]" in mix    # full level — nothing to duck under
+    assert "[v" not in mix  # no narration tracks
+    assert "volume=0dB[mus]" in mix  # full level — nothing to duck under
     assert "amix=inputs=1" in mix
 
 
@@ -229,8 +239,8 @@ def test_compose_final_partial_narration_indexes_added_inputs() -> None:
     assert notices == ["Narration unavailable for scene(s) 2."]
     mix = _filter_for(calls, "mix-audio")
     # Two narration inputs (indices 0,1) + music (index 2) → amix of 3.
-    assert "[0:a]adelay=0" in mix          # scene 0 at offset 0
-    assert "[1:a]adelay=16000" in mix      # scene 2 at offset 2x8000ms
+    assert "[0:a]adelay=0" in mix  # scene 0 at offset 0
+    assert "[1:a]adelay=16000" in mix  # scene 2 at offset 2x8000ms
     assert "[2:a]volume=-18dB[mus]" in mix
     assert "amix=inputs=3" in mix
     # Regression guard: `apad` (no length) pads to infinity and hangs
@@ -242,15 +252,16 @@ def test_compose_final_no_audio_renders_silent_video() -> None:
     """No narration and no music → silent video; mix-audio skipped, finalize uses -an."""
     spec = _make_spec(3)
     asset, notices, calls = _run_compose(
-        _make_b2_run(3, narration_scenes=set(), music=False), spec,
+        _make_b2_run(3, narration_scenes=set(), music=False),
+        spec,
     )
 
     stages = [s for s, _ in calls]
-    assert "mix-audio" not in stages   # no audio to mix
+    assert "mix-audio" not in stages  # no audio to mix
     finalize_args = next(a for s, a in calls if s == "finalize")
-    assert "-an" in finalize_args      # explicit silent track
+    assert "-an" in finalize_args  # explicit silent track
     assert "1:a" not in finalize_args  # no audio input mapped
-    assert len(notices) == 2           # narration + music both reported
+    assert len(notices) == 2  # narration + music both reported
     assert asset.media_type == "video/mp4"
 
 
@@ -260,9 +271,9 @@ def test_compose_final_soft_subs_when_libass_missing() -> None:
     asset, notices, calls = _run_compose(_make_b2_run(3), spec, has_subtitles=False)
 
     finalize_args = next(a for s, a in calls if s == "finalize")
-    assert "mov_text" in finalize_args              # soft subtitle track
+    assert "mov_text" in finalize_args  # soft subtitle track
     assert not any("subtitles=" in a for a in finalize_args)  # NOT burned
-    assert any("burned in" in n for n in notices)   # user is told why
+    assert any("burned in" in n for n in notices)  # user is told why
     assert asset.media_type == "video/mp4"
 
 
@@ -284,14 +295,16 @@ def test_compose_final_captions_failure_falls_back_to_no_captions() -> None:
             raise RuntimeError("ffmpeg finalize failed: boom")
         Path(args[-1]).write_bytes(b"x")
 
-    with patch.object(composer, "backend", return_value=fake), \
-         patch.object(composer, "_run_ffmpeg", side_effect=_fake_ffmpeg), \
-         patch.object(composer, "_available_filters", return_value=frozenset({"subtitles"})), \
-         patch.object(composer.shutil, "which", return_value="/usr/bin/ffmpeg"), \
-         patch.object(composer.Mp4Handler, "embed", return_value=None):
+    with (
+        patch.object(composer, "backend", return_value=fake),
+        patch.object(composer, "_run_ffmpeg", side_effect=_fake_ffmpeg),
+        patch.object(composer, "_available_filters", return_value=frozenset({"subtitles"})),
+        patch.object(composer.shutil, "which", return_value="/usr/bin/ffmpeg"),
+        patch.object(composer.Mp4Handler, "embed", return_value=None),
+    ):
         asset, notices = composer.compose_final(b2_run, b1_run, spec)
 
-    assert calls.count("finalize") == 2             # retried without captions
+    assert calls.count("finalize") == 2  # retried without captions
     assert any("Captions unavailable" in n for n in notices)
     assert asset.media_type == "video/mp4"
 
@@ -304,13 +317,15 @@ def test_compose_final_video_falls_back_to_keyframe_still() -> None:
     assert any("video unavailable for scene(s) 3" in n.lower() for n in notices)
     # The concat input list loops the still image for scene 2 (3rd input).
     concat_args = next(a for s, a in calls if s == "concat")
-    assert "-loop" in concat_args                 # still image looped to a clip
+    assert "-loop" in concat_args  # still image looped to a clip
     assert any("scene_02_still.png" in a for a in concat_args)
     # Run still completes with a valid MP4 asset.
     assert asset.media_type == "video/mp4"
 
 
 def test_compose_final_fails_loud_when_ffmpeg_missing() -> None:
-    with patch.object(composer.shutil, "which", return_value=None), \
-         pytest.raises(RuntimeError, match="ffmpeg binary not found"):
+    with (
+        patch.object(composer.shutil, "which", return_value=None),
+        pytest.raises(RuntimeError, match="ffmpeg binary not found"),
+    ):
         composer.compose_final(_make_b2_run(3), _make_b1_run(3), _make_spec(3))

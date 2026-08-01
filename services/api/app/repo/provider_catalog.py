@@ -65,11 +65,17 @@ def _instrumental_music_registry() -> ModelRegistry:
     """
     reg = build_audio_registry()
     base = reg.get(settings.music_model)
-    reg.register(replace(
-        base,
-        param_allowlist=(base.param_allowlist or frozenset()) | {"lyrics", "is_instrumental"},
-        param_defaults={**dict(base.param_defaults), "lyrics": "[Inst]", "is_instrumental": True},
-    ))
+    reg.register(
+        replace(
+            base,
+            param_allowlist=(base.param_allowlist or frozenset()) | {"lyrics", "is_instrumental"},
+            param_defaults={
+                **dict(base.param_defaults),
+                "lyrics": "[Inst]",
+                "is_instrumental": True,
+            },
+        )
+    )
     return reg
 
 
@@ -79,12 +85,12 @@ class CatalogEntry:
 
     slot: str
     vendor: str
-    env_key: str                       # settings attribute gating availability
-    default_model: str                 # curated default (also the DTO fallback)
+    env_key: str  # settings attribute gating availability
+    default_model: str  # curated default (also the DTO fallback)
     suggested_models: tuple[str, ...]  # dropdown hints; free-text override allowed
-    modality: Modality | None = None   # genblaze Modality for `.step()`; None for chat
+    modality: Modality | None = None  # genblaze Modality for `.step()`; None for chat
     make: Callable[[], BaseProvider] | None = None  # None => chat (special path)
-    image_handoff: str | None = None   # "external_inputs" | "image_kwarg" (video only)
+    image_handoff: str | None = None  # "external_inputs" | "image_kwarg" (video only)
     snap_durations: tuple[float, ...] | None = None  # video clip-length grid
 
 
@@ -102,7 +108,9 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
     # function, not a provider). Dispatched by `pipelines.generate_storyboard`.
     CHAT: {
         "openai": CatalogEntry(
-            slot=CHAT, vendor="openai", env_key="openai_api_key",
+            slot=CHAT,
+            vendor="openai",
+            env_key="openai_api_key",
             default_model=settings.chat_model,
             suggested_models=("gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1"),
         ),
@@ -112,38 +120,56 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
     # seededit / reve-edit) — no text-to-image generation surface.
     IMAGE: {
         "replicate": CatalogEntry(
-            slot=IMAGE, vendor="replicate", env_key="replicate_api_token",
+            slot=IMAGE,
+            vendor="replicate",
+            env_key="replicate_api_token",
             default_model="black-forest-labs/flux-schnell",
-            suggested_models=("black-forest-labs/flux-schnell",
-                              "black-forest-labs/flux-dev", "google/imagen-4"),
+            suggested_models=(
+                "black-forest-labs/flux-schnell",
+                "black-forest-labs/flux-dev",
+                "google/imagen-4",
+            ),
             modality=Modality.IMAGE,
             make=lambda: ReplicateProvider(api_token=settings.replicate_api_token),
         ),
         "google": CatalogEntry(
-            slot=IMAGE, vendor="google", env_key="google_api_key",
+            slot=IMAGE,
+            vendor="google",
+            env_key="google_api_key",
             default_model=settings.image_model,
-            suggested_models=("imagen-4.0-generate-001", "imagen-4.0-ultra-generate-001",
-                              "imagen-4.0-fast-generate-001"),
+            suggested_models=(
+                "imagen-4.0-generate-001",
+                "imagen-4.0-ultra-generate-001",
+                "imagen-4.0-fast-generate-001",
+            ),
             modality=Modality.IMAGE,
             make=lambda: ImagenProvider(api_key=settings.google_api_key),
         ),
         "openai": CatalogEntry(
-            slot=IMAGE, vendor="openai", env_key="openai_api_key",
+            slot=IMAGE,
+            vendor="openai",
+            env_key="openai_api_key",
             default_model="gpt-image-1-mini",
             suggested_models=("gpt-image-1-mini", "gpt-image-1", "dall-e-3"),
             modality=Modality.IMAGE,
             make=lambda: DalleProvider(api_key=settings.openai_api_key),
         ),
         "nvidia": CatalogEntry(
-            slot=IMAGE, vendor="nvidia", env_key="nvidia_api_key",
+            slot=IMAGE,
+            vendor="nvidia",
+            env_key="nvidia_api_key",
             default_model="black-forest-labs/flux.1-schnell",
-            suggested_models=("black-forest-labs/flux.1-schnell",
-                              "stabilityai/stable-diffusion-3-5-large"),
+            suggested_models=(
+                "black-forest-labs/flux.1-schnell",
+                "stabilityai/stable-diffusion-3-5-large",
+            ),
             modality=Modality.IMAGE,
             make=lambda: NvidiaImageProvider(api_key=settings.nvidia_api_key),
         ),
         "decart": CatalogEntry(
-            slot=IMAGE, vendor="decart", env_key="decart_api_key",
+            slot=IMAGE,
+            vendor="decart",
+            env_key="decart_api_key",
             default_model="lucy-pro-t2i",
             suggested_models=("lucy-pro-t2i",),
             modality=Modality.IMAGE,
@@ -154,33 +180,44 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
     # "external_inputs" for everyone except Decart's legacy `image=` path.
     VIDEO: {
         "replicate": CatalogEntry(
-            slot=VIDEO, vendor="replicate", env_key="replicate_api_token",
+            slot=VIDEO,
+            vendor="replicate",
+            env_key="replicate_api_token",
             default_model="minimax/video-01",
-            suggested_models=("minimax/video-01", "kwaivgi/kling-v2.1",
-                              "wan-video/wan-2.5-i2v"),
+            suggested_models=("minimax/video-01", "kwaivgi/kling-v2.1", "wan-video/wan-2.5-i2v"),
             modality=Modality.VIDEO,
             make=lambda: ReplicateProvider(api_token=settings.replicate_api_token),
             image_handoff="external_inputs",
         ),
         "gmicloud": CatalogEntry(
-            slot=VIDEO, vendor="gmicloud", env_key="gmi_api_key",
+            slot=VIDEO,
+            vendor="gmicloud",
+            env_key="gmi_api_key",
             default_model=settings.gmi_video_model,
             suggested_models=("Kling-Image2Video-V2.1-Master", "pixverse-v5.6-i2v"),
             modality=Modality.VIDEO,
             make=lambda: GMICloudVideoProvider(api_key=settings.gmi_api_key),
-            image_handoff="external_inputs", snap_durations=KLING_GRID,
+            image_handoff="external_inputs",
+            snap_durations=KLING_GRID,
         ),
         "google": CatalogEntry(
-            slot=VIDEO, vendor="google", env_key="google_api_key",
+            slot=VIDEO,
+            vendor="google",
+            env_key="google_api_key",
             default_model="veo-3.0-generate-001",
-            suggested_models=("veo-3.0-generate-001", "veo-3.0-fast-generate-001",
-                              "veo-2.0-generate-001"),
+            suggested_models=(
+                "veo-3.0-generate-001",
+                "veo-3.0-fast-generate-001",
+                "veo-2.0-generate-001",
+            ),
             modality=Modality.VIDEO,
             make=lambda: VeoProvider(api_key=settings.google_api_key),
             image_handoff="external_inputs",
         ),
         "openai": CatalogEntry(
-            slot=VIDEO, vendor="openai", env_key="openai_api_key",
+            slot=VIDEO,
+            vendor="openai",
+            env_key="openai_api_key",
             default_model="sora-2",
             suggested_models=("sora-2", "sora-2-pro"),
             modality=Modality.VIDEO,
@@ -188,7 +225,9 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             image_handoff="external_inputs",
         ),
         "runway": CatalogEntry(
-            slot=VIDEO, vendor="runway", env_key="runway_api_secret",
+            slot=VIDEO,
+            vendor="runway",
+            env_key="runway_api_secret",
             default_model="gen4_turbo",
             suggested_models=("gen4_turbo", "gen3a_turbo"),
             modality=Modality.VIDEO,
@@ -196,7 +235,9 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             image_handoff="external_inputs",
         ),
         "luma": CatalogEntry(
-            slot=VIDEO, vendor="luma", env_key="luma_api_key",
+            slot=VIDEO,
+            vendor="luma",
+            env_key="luma_api_key",
             default_model="ray-2",
             suggested_models=("ray-2", "ray-flash-2"),
             modality=Modality.VIDEO,
@@ -204,7 +245,9 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             image_handoff="external_inputs",
         ),
         "nvidia": CatalogEntry(
-            slot=VIDEO, vendor="nvidia", env_key="nvidia_api_key",
+            slot=VIDEO,
+            vendor="nvidia",
+            env_key="nvidia_api_key",
             default_model="nvidia/cosmos-2.0-diffusion-video2world",
             suggested_models=("nvidia/cosmos-2.0-diffusion-video2world",),
             modality=Modality.VIDEO,
@@ -212,7 +255,9 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             image_handoff="external_inputs",
         ),
         "decart": CatalogEntry(
-            slot=VIDEO, vendor="decart", env_key="decart_api_key",
+            slot=VIDEO,
+            vendor="decart",
+            env_key="decart_api_key",
             # `lucy-pro-i2v`, NOT settings.video_model (`lucy-2.1`): Decart's
             # i2v family is `^lucy-.*(?:2v|...)`. NOTE: Decart retired hosted
             # image-to-video, so this path typically fails at runtime → the
@@ -227,35 +272,45 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
     # TTS — text-to-speech narration (Modality.AUDIO, text input).
     TTS: {
         "openai": CatalogEntry(
-            slot=TTS, vendor="openai", env_key="openai_api_key",
+            slot=TTS,
+            vendor="openai",
+            env_key="openai_api_key",
             default_model="gpt-4o-mini-tts",
             suggested_models=("gpt-4o-mini-tts", "tts-1", "tts-1-hd"),
             modality=Modality.AUDIO,
             make=lambda: OpenAITTSProvider(api_key=settings.openai_api_key),
         ),
         "nvidia": CatalogEntry(
-            slot=TTS, vendor="nvidia", env_key="nvidia_api_key",
+            slot=TTS,
+            vendor="nvidia",
+            env_key="nvidia_api_key",
             default_model=settings.tts_model,
             suggested_models=("nvidia/magpie-tts-multilingual",),
             modality=Modality.AUDIO,
             make=lambda: NvidiaAudioProvider(api_key=settings.nvidia_api_key),
         ),
         "elevenlabs": CatalogEntry(
-            slot=TTS, vendor="elevenlabs", env_key="elevenlabs_api_key",
+            slot=TTS,
+            vendor="elevenlabs",
+            env_key="elevenlabs_api_key",
             default_model="eleven_multilingual_v2",
             suggested_models=("eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_v3"),
             modality=Modality.AUDIO,
             make=lambda: ElevenLabsTTSProvider(api_key=settings.elevenlabs_api_key),
         ),
         "lmnt": CatalogEntry(
-            slot=TTS, vendor="lmnt", env_key="lmnt_api_key",
+            slot=TTS,
+            vendor="lmnt",
+            env_key="lmnt_api_key",
             default_model="aurora",
             suggested_models=("aurora", "blizzard"),
             modality=Modality.AUDIO,
             make=lambda: LMNTProvider(api_key=settings.lmnt_api_key),
         ),
         "hume": CatalogEntry(
-            slot=TTS, vendor="hume", env_key="hume_api_key",
+            slot=TTS,
+            vendor="hume",
+            env_key="hume_api_key",
             default_model="octave-2",
             suggested_models=("octave-2", "octave-1"),
             modality=Modality.AUDIO,
@@ -266,25 +321,31 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
     # instrumental registry override (baked into `make`).
     MUSIC: {
         "replicate": CatalogEntry(
-            slot=MUSIC, vendor="replicate", env_key="replicate_api_token",
+            slot=MUSIC,
+            vendor="replicate",
+            env_key="replicate_api_token",
             default_model="meta/musicgen",
             suggested_models=("meta/musicgen", "ardianfe/music-gen-fn-200e"),
             modality=Modality.AUDIO,
             make=lambda: ReplicateProvider(api_token=settings.replicate_api_token),
         ),
         "gmicloud": CatalogEntry(
-            slot=MUSIC, vendor="gmicloud", env_key="gmi_api_key",
+            slot=MUSIC,
+            vendor="gmicloud",
+            env_key="gmi_api_key",
             default_model=settings.music_model,
             suggested_models=("minimax-music-2.5",),
             modality=Modality.AUDIO,
             make=lambda: GMICloudAudioProvider(
-                api_key=settings.gmi_api_key, models=_instrumental_music_registry()),
+                api_key=settings.gmi_api_key, models=_instrumental_music_registry()
+            ),
         ),
     },
 }
 
 
 # --- Lookup helpers ---------------------------------------------------------
+
 
 def entries_for(slot: str) -> list[CatalogEntry]:
     """All vendor entries registered for a slot (insertion order = UI order)."""

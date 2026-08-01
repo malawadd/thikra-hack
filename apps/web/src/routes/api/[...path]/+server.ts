@@ -16,6 +16,11 @@ const forward: RequestHandler = async ({ request, params, url, fetch }) => {
   const headers = new Headers(request.headers);
   headers.delete('host');
   headers.delete('connection');
+  // Local Studio uses the same scoped public commerce API as external agents.
+  // The demo key remains server-only inside this same-origin BFF.
+  if (params.path.startsWith('api/v1/') && !headers.has('authorization') && env.THIKRA_DEMO_API_KEY) {
+    headers.set('authorization', `Bearer ${env.THIKRA_DEMO_API_KEY}`);
+  }
   const hasBody = !['GET', 'HEAD'].includes(request.method);
   try {
     const upstream = await fetch(target, {

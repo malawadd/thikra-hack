@@ -32,9 +32,20 @@ request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 # passed in `extra` is also emitted, but we list the conventional ones so
 # call sites can copy-paste with confidence.
 _KNOWN_EXTRAS = (
-    "duration_ms", "status", "endpoint", "method", "path",
-    "stage", "step_index", "model", "provider", "run_id",
-    "key", "size_bytes", "scene_count", "argv0",
+    "duration_ms",
+    "status",
+    "endpoint",
+    "method",
+    "path",
+    "stage",
+    "step_index",
+    "model",
+    "provider",
+    "run_id",
+    "key",
+    "size_bytes",
+    "scene_count",
+    "argv0",
 )
 
 
@@ -84,10 +95,29 @@ def _safe(value: object) -> object:
 # Standard LogRecord attributes that we don't want to mirror into the
 # JSON envelope (they're metadata about the log call itself).
 _LOGRECORD_RESERVED = {
-    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-    "created", "msecs", "relativeCreated", "thread", "threadName",
-    "processName", "process", "taskName", "asctime", "message",
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "taskName",
+    "asctime",
+    "message",
 }
 
 

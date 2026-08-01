@@ -1,5 +1,62 @@
 # Thikra build log
 
+## 2026-08-01 — external-commerce extension baseline
+
+- Source revision: `bf96a37`.
+- `pnpm install` → passed; workspace was already up to date.
+- `pnpm check:structure` → passed; active SvelteKit structure verified and 7 backend
+  structural tests passed.
+- `pnpm lint` → passed; ESLint and Ruff reported no errors.
+- `pnpm typecheck` → passed with 0 errors and 0 warnings.
+- `pnpm test` → passed; backend 100 passed / 4 skipped and frontend 1 passed.
+- `cd services/api && uv run pytest tests/ -x` → passed; 100 passed / 4 skipped with
+  3 existing upstream deprecation warnings.
+- `pnpm build` → passed; SvelteKit production build completed with 270 client modules.
+- `pnpm test:e2e` → **failed before the external-commerce changes**. The one Playwright
+  journey timed out waiting for “Review the compiled mandate” because the repository `.env`
+  selected `SANDBOX`; the E2E launcher did not override it to `DEMO`, so the compile action
+  remained in its external provider call instead of using the deterministic fixture. This
+  environment-isolation defect is part of the extension work and is not recorded as a pass.
+- Existing untracked `gen.txt`, `prave.txt`, and `yarn.lock` remain untouched.
+
+## 2026-08-01 — agent-commerce extension final verification
+
+- `pnpm lint` → passed; ESLint and Ruff reported no errors.
+- `pnpm typecheck` → passed; Svelte reported 0 errors / 0 warnings and both
+  `@thikra/sdk` and `@thikra/agent-client` passed `tsc --noEmit`.
+- `pnpm check:structure` → passed; active SvelteKit structure verified and all 11
+  backend structural tests passed, including the provider/storage boundaries,
+  paid-fulfillment guards, private-order guards, MCP facade boundary, and no-placeholder rule.
+- `pnpm test` → passed; backend 113 passed / 4 provider-dependent skipped in 53.71s,
+  and the frontend reducer test passed.
+- `pnpm build` → passed; SvelteKit adapter-node production build transformed 285 SSR
+  and 309 client modules, and both TypeScript packages passed type checking.
+- `pnpm test:e2e` → 3 passed in 41.7s. The production-server
+  journeys covered the original Noura Glow procurement, the new human marketplace
+  quote-to-signed-delivery path, and a 390×844 marketplace layout/overflow/navigation check.
+- `uv run alembic upgrade head` against a fresh temporary SQLite database → passed at
+  revision `20260801_0002`; 35 tables were present and all required commerce tables were found.
+- `pnpm demo:agent` → passed. The real MCP client discovered 17 tools and six
+  services; the buyer obtained an 835-minor-unit quote, created an unpaid order, explicitly
+  approved the simulated DEMO payment, exercised the controlled retry, reached `DELIVERED`,
+  verified the Ed25519 receipt remotely and locally, and downloaded the final demo asset.
+- Mobile screenshot inspection found and fixed a catalog-field mismatch that displayed
+  `$0.00` starting prices; the final browser test asserts the flagship `$5.00` base price.
+- Public REST and MCP traffic now shares a credential-digest sliding-window limiter (120
+  requests / 60 seconds by default), with a stricter 30-quote bucket, standard remaining-limit
+  headers, `429`/`Retry-After` responses, and focused expiry coverage.
+- `node --check` passed for all three cross-platform demo/E2E launchers.
+- `git diff --check` → passed.
+
+### Credential-dependent verification not claimed
+
+- No live Prava merchant charge or refund was run. The installed official SDK surface provides
+  card-enrollment/session/result reporting but no merchant-acquiring charge or refund endpoint;
+  SANDBOX therefore stops at `MERCHANT_CHARGE_REQUIRED` until an official merchant operation is supplied.
+- No paid external Genblaze provider call or production Backblaze B2 delivery was run during
+  final verification. DEMO uses visibly labeled deterministic fixtures; configured non-DEMO
+  fulfillment retains the existing Genblaze and B2 path.
+
 ## 2026-08-01 — baseline
 
 - Source revision: `2e31577` (`feat: implement interactive provider switchboard for modality selection`).

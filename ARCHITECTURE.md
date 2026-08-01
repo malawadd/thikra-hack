@@ -96,3 +96,90 @@ Each event hashes canonical JSON plus the previous hash. UTC normalization keeps
 ## Modes and failure policy
 
 DEMO materializes labeled fixtures. SANDBOX runs real configured Prava and Genblaze/B2 integrations. PRODUCTION performs startup validation and uses explicit CORS origins. Essential B0/B1 preflight remains enabled; B2 stays best-effort. Missing video can fall back to a keyframe, missing audio becomes a warning, but missing all visuals fails. Low confidence, rights uncertainty, policy thresholds, or explicit mandate rules produce human review.
+
+## External commerce flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Buyer as External Buyer Agent
+    participant Gateway as Thikra Agent Gateway
+    participant Catalog as Service Catalog
+    participant Prava
+    participant Fulfill as Fulfillment Engine
+    participant Genblaze
+    participant B2
+    participant Verify as Verification Engine
+    User->>Buyer: Create verified Arabic ad under $10
+    Buyer->>Gateway: Discover services
+    Gateway->>Catalog: List active offers
+    Catalog-->>Buyer: Service definitions
+    Buyer->>Gateway: Request quote
+    Gateway-->>Buyer: Quote, mandate preview and expiry
+    Buyer->>Gateway: Create order
+    Gateway-->>Buyer: Order and payment action
+    Buyer->>Prava: Request user authorization
+    Prava->>User: Approve bounded payment
+    User->>Prava: Approve
+    Prava-->>Gateway: Authorization result
+    Gateway->>Fulfill: Start exactly paid order
+    Fulfill->>Genblaze: Execute media pipeline
+    Genblaze->>B2: Store source and generated assets
+    Genblaze-->>Fulfill: Generation events
+    Fulfill->>Verify: Evaluate assets
+    Verify->>B2: Read assets and manifests
+    Verify-->>Fulfill: Pass, fail, warning or review
+    alt Retry permitted
+        Fulfill->>Genblaze: Retry failed component
+        Genblaze->>B2: Store replacement asset
+        Fulfill->>Verify: Re-evaluate
+    end
+    Fulfill->>B2: Store delivery receipt and evidence
+    Fulfill-->>Gateway: Order delivered
+    Gateway-->>Buyer: Deliverables and signed receipt
+    Buyer-->>User: Final verified media awaiting acceptance
+```
+
+## Commercial object model
+
+```mermaid
+flowchart TD
+    SO[Service Offer] --> SV[Service Version]
+    SV --> Q[Quote]
+    Q --> O[Order]
+    BP[Buyer Principal] --> O
+    BA[Buyer Agent] --> O
+    APP[Developer Application] --> BA
+    O --> PA[Payment Authorization]
+    PA --> P[Payment]
+    P --> F[Fulfillment Job]
+    F --> M[Creative Mandate]
+    F --> GR[Generation Run]
+    GR --> A[Assets]
+    A --> V[Verification Results]
+    V --> D[Deliverables]
+    D --> DR[Delivery Receipt]
+    O --> DS[Dispute]
+    DS --> RF[Refund Request or Supported Refund]
+    O --> E[Audit and Evidence Graph]
+    P --> E
+    GR --> E
+    V --> E
+    DR --> E
+    DS --> E
+```
+
+## Thikra's three economic roles
+
+```mermaid
+flowchart LR
+    EXT[External Buyer Agent] -->|Pays for outcome| SELLER[Thikra as Seller]
+    SELLER -->|Creates fulfillment mandate| SUPERVISOR[Thikra as Supervisor]
+    SUPERVISOR -->|Selects and purchases capacity| BUYER[Thikra as Buyer]
+    BUYER --> PROVIDERS[Generation Providers]
+    PROVIDERS -->|Media assets| SUPERVISOR
+    SUPERVISOR -->|Verified deliverable| SELLER
+    SELLER -->|Delivery and receipt| EXT
+```
+
+REST, MCP, and SvelteKit call the same commercial domain services. Customer revenue and internal provider procurement remain different payment directions and records. The audit graph extends from principal/application/agent through service, quote, order, customer payment, fulfillment, media, verification, receipt, dispute, and redress.

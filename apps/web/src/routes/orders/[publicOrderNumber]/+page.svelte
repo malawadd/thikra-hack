@@ -1,0 +1,30 @@
+<script lang="ts">
+  import { onMount } from 'svelte'; import { page } from '$app/state';
+  import CheckCircle2 from 'lucide-svelte/icons/circle-check-big'; import ExternalLink from 'lucide-svelte/icons/external-link'; import RotateCcw from 'lucide-svelte/icons/rotate-ccw'; import ShieldAlert from 'lucide-svelte/icons/shield-alert';
+  import PageHeader from '$lib/components/PageHeader.svelte'; import AsyncState from '$lib/components/AsyncState.svelte'; import StatusBadge from '$lib/components/StatusBadge.svelte'; import { api, money, shortDate, titleCase } from '$lib/api/client';
+  let order = $state<any>(null); let deliverables = $state<any[]>([]); let receipt = $state<any>(null); let loading = $state(true); let busy = $state(false); let error = $state(''); let approvalUrl = $state(''); let email = $state('buyer@nouraglow.sa');
+  onMount(load);
+  async function load() { loading = true; try { order = await api(`/api/v1/orders/by-number/${page.params.publicOrderNumber}`); if (['DELIVERED','COMPLETED','DISPUTED','REDRESS_OPEN'].includes(order.status)) { deliverables = (await api<any>(`/api/v1/orders/${order.id}/deliverables`)).deliverables; receipt = await api(`/api/v1/orders/${order.id}/delivery-receipt`); } } catch(cause){ error=cause instanceof Error?cause.message:String(cause); } finally { loading=false; } }
+  async function mutate(path:string, body:unknown={}) { busy=true; error=''; try { const result:any=await api(path,{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify(body)}); if(result.checkout?.approval_url) approvalUrl=result.checkout.approval_url; await load(); } catch(cause){error=cause instanceof Error?cause.message:String(cause);} finally{busy=false;} }
+</script>
+<AsyncState {loading} {error}>
+{#if order}
+  <PageHeader eyebrow="Authenticated commercial order" title={order.public_order_number} description={`${order.service} · quote ${order.quote_id}`} />
+  <div class="actions" style="margin-bottom:20px"><StatusBadge status={order.status} /><span class="badge" data-tone="info">Payment: {titleCase(order.payment_state)}</span><span class="badge">Fulfillment: {titleCase(order.fulfillment_state)}</span></div>
+  <section class="grid grid-4"><div class="card stat-card"><span class="stat-label">Quoted</span><strong class="stat-value">{money(order.quoted_total_minor,order.currency)}</strong></div><div class="card stat-card"><span class="stat-label">Paid</span><strong class="stat-value">{money(order.paid_total_minor,order.currency)}</strong></div><div class="card stat-card"><span class="stat-label">Progress</span><strong class="stat-value">{order.progress}%</strong></div><div class="card stat-card"><span class="stat-label">Created</span><strong class="stat-value" style="font-size:1rem">{shortDate(order.created_at)}</strong></div></section>
+  <div class="grid grid-2 section">
+    <section class="card card-pad"><h2>Next safe action</h2><p class="muted">{order.user_action_required ?? 'No buyer action is currently required.'}</p>
+      {#if order.status==='QUOTED'}<div class="field"><label for="payment-email">Approver email</label><input id="payment-email" bind:value={email} type="email" /></div><button class="btn btn-primary" disabled={busy} onclick={()=>mutate(`/api/v1/orders/${order.id}/payment-authorization`,{user_id:'studio-buyer',user_email:email})}>Create bounded authorization</button>
+      {:else if order.status==='PAYMENT_AUTHORIZATION_PENDING'}<button class="btn btn-primary" disabled={busy} onclick={()=>mutate(`/api/v1/orders/${order.id}/payment/confirm-demo`,{approved_by:'studio-buyer',acknowledge_simulation:true})}>Approve simulated demo payment</button><p class="help">Demo only. This button never represents a live Prava transaction.</p>
+      {:else if order.status==='PAID'}<button class="btn btn-primary" disabled={busy} onclick={()=>mutate(`/api/v1/orders/${order.id}/start`)}>Start paid fulfillment</button>
+      {:else if order.status==='REVIEW_REQUIRED'}<button class="btn btn-primary" disabled={busy} onclick={()=>mutate(`/api/v1/orders/${order.id}/retry`,{component:'failed verification',reason:'Buyer-authorized policy retry'})}><RotateCcw size={15}/> Retry failed component</button>
+      {:else if order.status==='DELIVERED'}<button class="btn btn-primary" disabled={busy} onclick={()=>mutate(`/api/v1/orders/${order.id}/accept`)}><CheckCircle2 size={15}/> Accept delivery</button><button class="btn btn-danger" disabled={busy} onclick={()=>mutate(`/api/v1/orders/${order.id}/disputes`,{reason_code:'BUYER_REVIEW',description:'Buyer requested human review from the order detail page.'})}><ShieldAlert size={15}/> Open dispute</button>{/if}
+      {#if approvalUrl}<a class="btn btn-secondary" target="_blank" href={approvalUrl}>Open Prava approval <ExternalLink size={14}/></a>{/if}
+    </section>
+    <section class="card card-pad"><h2>Commercial input</h2><pre class="code-block">{JSON.stringify(order.input,null,2)}</pre></section>
+  </div>
+  {#if deliverables.length}<section class="section"><div class="section-title"><h2>Verified deliverables</h2><span class="badge" data-tone="success">Delivery, not acceptance</span></div><div class="grid grid-3">{#each deliverables as item}<article class="card card-pad"><span class="badge">{item.type}</span><h3>{item.name}</h3><p class="mono muted">{item.sha256}</p><a class="btn btn-secondary" href={item.download_url}>Download <ExternalLink size={14}/></a></article>{/each}</div></section>{/if}
+  {#if receipt}<section class="card card-pad section"><h2>Signed payment-to-delivery receipt</h2><p class="mono">{receipt.receipt_hash}</p><details><summary>Canonical payload & Ed25519 signature</summary><pre class="code-block">{JSON.stringify(receipt,null,2)}</pre></details></section>{/if}
+  <section class="card card-pad section"><h2>Order event chain</h2><div class="timeline">{#each order.events as event}<div class="timeline-item"><div class="timeline-dot"></div><div><h3>{titleCase(event.event_type)}</h3><p>{shortDate(event.created_at)} · {event.actor_type}</p></div></div>{/each}</div></section>
+{/if}
+</AsyncState>

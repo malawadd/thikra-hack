@@ -1,0 +1,324 @@
+"""Commercial-domain and full public REST flow tests."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from itertools import pairwise
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from app.commerce.api import router
+from app.commerce.models import APIKey, CommercialOrder, Quote, ServiceOffer
+from app.commerce.pricing import quote_breakdown
+from app.commerce.rate_limit import SlidingWindowRateLimiter
+from app.commerce.receipts import sign_receipt, verify_receipt
+from app.commerce.security import authenticate_api_key, hash_secret
+from app.commerce.service import seed_commerce
+from app.commerce.state_machine import InvalidOrderTransition, transition_order
+from app.commerce.webhooks import (
+    signature_headers,
+    validate_callback_url,
+    verify_webhook_signature,
+)
+from app.config import settings
+from app.thikra.database import Base, get_db
+from app.thikra.service import seed_database
+
+DEMO_KEY = "thikra_test_demo_local_only"
+
+
+@pytest.fixture
+def commerce_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "app_mode", "DEMO")
+    monkeypatch.setattr(settings, "thikra_data_dir", str(tmp_path / "evidence"))
+    monkeypatch.setattr(settings, "thikra_demo_api_key", DEMO_KEY)
+    engine = create_engine(f"sqlite:///{tmp_path / 'commerce.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as session:
+        seed_database(session)
+        seed_commerce(session)
+        yield session
+
+
+@pytest.fixture
+def commerce_client(commerce_db: Session):
+    application = FastAPI()
+    application.include_router(router)
+    application.dependency_overrides[get_db] = lambda: commerce_db
+    with TestClient(application) as client:
+        yield client
+
+
+def _headers(key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {DEMO_KEY}", "Idempotency-Key": key}
+
+
+def _quote_payload() -> dict:
+    return {
+        "service": "verified-vertical-ad",
+        "input": {
+            "brief": "Create a verified Arabic vertical advertisement for Noura Glow without people or medical claims.",
+            "durationSeconds": 15,
+            "language": "ar",
+            "aspectRatio": "9:16",
+            "resolution": "1080x1920",
+            "requiredElements": ["Noura Glow product visible"],
+            "forbiddenElements": ["real people", "medical claims"],
+            "maximumRetries": 2,
+        },
+        "buyer_principal": {
+            "type": "HUMAN",
+            "display_name": "Noura buyer",
+            "email": "buyer@nouraglow.sa",
+        },
+        "buyer_agent": {
+            "name": "External test buyer",
+            "framework": "scripted-mcp-client",
+            "model_name": "deterministic",
+            "external_agent_id": "test-agent-1",
+        },
+        "maximum_budget": {"amount_minor": 1000, "currency": "USD"},
+    }
+
+
+def test_agent_gateway_sliding_window_rate_limit(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "thikra_rate_limit_requests", 10)
+    monkeypatch.setattr(settings, "thikra_quote_rate_limit_requests", 2)
+    monkeypatch.setattr(settings, "thikra_rate_limit_window_seconds", 60)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/quotes",
+            "raw_path": b"/api/v1/quotes",
+            "query_string": b"",
+            "headers": [(b"authorization", b"Bearer isolated-rate-limit-test")],
+            "client": ("127.0.0.1", 5000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+    )
+    limiter = SlidingWindowRateLimiter()
+    assert limiter.check(request, now=100.0).allowed is True
+    second = limiter.check(request, now=101.0)
+    assert second.allowed is True
+    assert second.remaining == 0
+    limited = limiter.check(request, now=102.0)
+    assert limited.allowed is False
+    assert limited.retry_after == 58
+    assert limiter.check(request, now=161.0).allowed is True
+
+
+def test_seeded_catalog_and_deterministic_pricing(commerce_db: Session):
+    offers = list(commerce_db.scalars(select(ServiceOffer)))
+    assert len(offers) == 6
+    flagship = next(offer for offer in offers if offer.slug == "verified-vertical-ad")
+    assert flagship.status == "ACTIVE"
+    assert flagship.maximum_price_minor == 1000
+    breakdown = quote_breakdown(500, 2)
+    assert breakdown["total_minor"] == sum(
+        breakdown[key]
+        for key in (
+            "provider_generation_estimate_minor",
+            "verification_fee_minor",
+            "storage_fee_minor",
+            "retry_reserve_minor",
+            "platform_fee_minor",
+            "fixed_fee_minor",
+            "tax_minor",
+        )
+    )
+
+
+def test_api_key_is_hashed_and_constant_time_authenticates(commerce_db: Session):
+    key = commerce_db.scalar(select(APIKey))
+    assert key.hashed_secret == hash_secret(DEMO_KEY)
+    assert DEMO_KEY not in key.hashed_secret
+    auth = authenticate_api_key(commerce_db, DEMO_KEY)
+    assert auth.application_id == key.application_id
+    with pytest.raises(ValueError):
+        authenticate_api_key(commerce_db, f"{DEMO_KEY}-wrong")
+
+
+def test_receipt_canonicalization_and_signature():
+    left = {"order_id": "one", "money": {"currency": "USD", "amount_minor": 500}}
+    right = {"money": {"amount_minor": 500, "currency": "USD"}, "order_id": "one"}
+    digest, signature = sign_receipt(left)
+    assert verify_receipt(right, digest, signature)
+    assert not verify_receipt(right | {"order_id": "two"}, digest, signature)
+
+
+def test_webhook_signature_and_ssrf_policy(monkeypatch: pytest.MonkeyPatch):
+    payload = {"id": "event-1"}
+    secret = "whsec_test"
+    timestamp = int(datetime.now(UTC).timestamp())
+    headers = signature_headers("event-1", payload, secret, timestamp=timestamp)
+    assert verify_webhook_signature(
+        payload=payload,
+        secret=secret,
+        timestamp=headers["Thikra-Timestamp"],
+        signature=headers["Thikra-Signature"],
+    )
+    assert not verify_webhook_signature(
+        payload=payload | {"changed": True},
+        secret=secret,
+        timestamp=headers["Thikra-Timestamp"],
+        signature=headers["Thikra-Signature"],
+    )
+    with pytest.raises(ValueError):
+        validate_callback_url("https://127.0.0.1/hook")
+    with pytest.raises(ValueError):
+        validate_callback_url("http://example.com/hook")
+    monkeypatch.setattr(settings, "thikra_webhook_development_allowlist", "hooks.example.test")
+    validate_callback_url("https://hooks.example.test/thikra", resolve_dns=False)
+
+
+def test_quote_expiration_and_invalid_order_transition(
+    commerce_db: Session, commerce_client: TestClient
+):
+    response = commerce_client.post(
+        "/api/v1/quotes", json=_quote_payload(), headers=_headers("quote-expiry-001")
+    )
+    assert response.status_code == 201, response.text
+    quote = commerce_db.get(Quote, response.json()["id"])
+    quote.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    commerce_db.commit()
+    expired = commerce_client.get(
+        f"/api/v1/quotes/{quote.id}", headers={"Authorization": f"Bearer {DEMO_KEY}"}
+    )
+    assert expired.json()["status"] == "EXPIRED"
+    with pytest.raises(InvalidOrderTransition):
+        order = CommercialOrder(status="READY")
+        transition_order(
+            commerce_db, order, "PAYMENT_PENDING", actor_type="SYSTEM", actor_id="test"
+        )
+
+
+def test_complete_external_agent_rest_flow(commerce_client: TestClient):
+    services = commerce_client.get("/api/v1/services")
+    assert services.status_code == 200
+    assert services.json()["total"] == 6
+
+    quote_response = commerce_client.post(
+        "/api/v1/quotes", json=_quote_payload(), headers=_headers("quote-create-001")
+    )
+    assert quote_response.status_code == 201, quote_response.text
+    quote = quote_response.json()
+    assert quote["total_minor"] <= 1000
+    assert quote["status"] == "ACTIVE"
+
+    accept = commerce_client.post(
+        f"/api/v1/quotes/{quote['id']}/accept", headers=_headers("quote-accept-001")
+    )
+    assert accept.status_code == 200, accept.text
+    assert accept.json()["status"] == "ACCEPTED"
+
+    created = commerce_client.post(
+        "/api/v1/orders",
+        json={"quote_id": quote["id"], "external_reference": "agent-demo-001"},
+        headers=_headers("order-create-001"),
+    )
+    assert created.status_code == 201, created.text
+    order = created.json()
+    order_id = order["id"]
+    assert order["status"] == "QUOTED"
+    assert order["paid_total_minor"] == 0
+
+    authorization = commerce_client.post(
+        f"/api/v1/orders/{order_id}/payment-authorization",
+        json={"user_id": "buyer-001", "user_email": "buyer@nouraglow.sa"},
+        headers=_headers("payment-auth-001"),
+    )
+    assert authorization.status_code == 201, authorization.text
+    assert authorization.json()["payment"]["authorization_state"] == "AUTHORIZATION_PENDING"
+    assert authorization.json()["payment"]["payment_state"] == "AWAITING_USER_APPROVAL"
+    assert authorization.json()["payment"]["simulated"] is True
+
+    paid = commerce_client.post(
+        f"/api/v1/orders/{order_id}/payment/confirm-demo",
+        json={"approved_by": "buyer-001", "acknowledge_simulation": True},
+        headers=_headers("payment-confirm-001"),
+    )
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["order"]["status"] == "PAID"
+    assert paid.json()["payment"]["payment_state"] == "SIMULATED_PAID"
+
+    started = commerce_client.post(
+        f"/api/v1/orders/{order_id}/start", headers=_headers("fulfillment-start-001")
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == "REVIEW_REQUIRED"
+
+    retried = commerce_client.post(
+        f"/api/v1/orders/{order_id}/retry",
+        json={"component": "Arabic narration", "reason": "Controlled demo verification failure"},
+        headers=_headers("fulfillment-retry-001"),
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "DELIVERED"
+
+    deliverables = commerce_client.get(
+        f"/api/v1/orders/{order_id}/deliverables",
+        headers={"Authorization": f"Bearer {DEMO_KEY}"},
+    )
+    assert deliverables.status_code == 200, deliverables.text
+    assert len(deliverables.json()["deliverables"]) >= 3
+    assert all("download_url" in item for item in deliverables.json()["deliverables"])
+
+    receipt_response = commerce_client.get(
+        f"/api/v1/orders/{order_id}/delivery-receipt",
+        headers={"Authorization": f"Bearer {DEMO_KEY}"},
+    )
+    assert receipt_response.status_code == 200, receipt_response.text
+    receipt = receipt_response.json()
+    verified = commerce_client.post(
+        "/api/v1/delivery-receipts/verify",
+        json={
+            "receipt_payload": receipt["receipt_payload"],
+            "receipt_hash": receipt["receipt_hash"],
+            "signature": receipt["signature"],
+            "signing_key_id": receipt["signing_key_id"],
+        },
+    )
+    assert verified.status_code == 200
+    assert verified.json()["valid"] is True
+
+    events = commerce_client.get(
+        f"/api/v1/orders/{order_id}/events",
+        headers={"Authorization": f"Bearer {DEMO_KEY}"},
+    ).json()["items"]
+    assert events[-1]["event_type"] == "order.delivered"
+    for previous, current in pairwise(events):
+        assert current["previous_event_hash"] == previous["event_hash"]
+
+    dispute = commerce_client.post(
+        f"/api/v1/orders/{order_id}/disputes",
+        json={
+            "reason_code": "DELIVERY_MISMATCH",
+            "description": "Buyer requests a human review of the delivered composition.",
+        },
+        headers=_headers("dispute-create-001"),
+    )
+    assert dispute.status_code == 201, dispute.text
+    assert dispute.json()["status"] == "OPEN"
+
+
+def test_idempotency_conflict_is_rejected(commerce_client: TestClient):
+    first = commerce_client.post(
+        "/api/v1/quotes", json=_quote_payload(), headers=_headers("same-key-123")
+    )
+    assert first.status_code == 201
+    changed = _quote_payload()
+    changed["input"]["brief"] = (
+        "A different valid brief that must not share the prior idempotent response."
+    )
+    conflict = commerce_client.post(
+        "/api/v1/quotes", json=changed, headers=_headers("same-key-123")
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_CONFLICT"

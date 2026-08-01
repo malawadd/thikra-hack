@@ -31,9 +31,12 @@ def test_providers_endpoint_returns_full_matrix() -> None:
 def test_media_stream_rejects_unknown_vendor_before_streaming() -> None:
     """A bogus vendor 422s at selection-resolution time — BEFORE any provider
     call or storyboard generation fires (so the test needs no live keys)."""
-    resp = client.post("/runs/media/stream", json={
-        "prompt": "a valid seed prompt",
-        "selection": {"image": {"vendor": "does-not-exist"}},
-    })
+    resp = client.post(
+        "/runs/media/stream",
+        json={
+            "prompt": "a valid seed prompt",
+            "selection": {"image": {"vendor": "does-not-exist"}},
+        },
+    )
     assert resp.status_code == 422
     assert resp.json()["detail"]["code"] == "bad_selection"

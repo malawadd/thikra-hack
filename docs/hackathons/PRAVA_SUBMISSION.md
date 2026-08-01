@@ -1,10 +1,5 @@
-# Prava submission
+# Prava submission — Thikra: An Agent-Accessible Verified Creative Services Network
 
-Thikra uses Prava as a bounded authorization mechanism inside an accountable procurement workflow—not as a decorative checkout button. Mandate ID, merchant, maximum amount, currency, expiration, and exact authorized action are registered before generation. Authorization, credential readiness, invocation/reporting, delivery, verification, acceptance, and redress appear as distinct states.
+An external agent discovers Thikra, requests a creative service, receives a deterministic quote, obtains human-approved bounded Prava authorization, pays through a merchant rail, receives verified media, and validates a signed payment-to-delivery receipt.
 
-The SvelteKit client uses the official secure iframe and publishable key. Secret calls, polling, one-time credentials, and outcome reporting stay in FastAPI. DEMO transactions are labeled simulated. The implementation deliberately does not invent webhooks, refunds, escrow, conditional settlement, or AI-provider card checkout capabilities absent from the official skill.
-
-Consumed or expired iframe links can be replaced in place: Thikra revokes the
-old session when possible, requests a new single-use session, and remounts the
-SDK with its new token. A sandbox-only `$0.00` verification flow tests secure
-card enrollment without authorizing provider spend or unlocking generation.
+The demo uses simulated payment and says so. With sandbox credentials, authorization is genuine Prava sandbox authorization; the current Prava SDK does not document acquiring or refunds, so Thikra never fabricates those outcomes. The submission emphasizes scoped approval, economic state separation, agent discovery, complete orders, trust, and transparent evidence.

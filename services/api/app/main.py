@@ -12,7 +12,6 @@ import asyncio
 import json
 import logging
 import shutil
-import time
 from functools import lru_cache
 from typing import Any
 
@@ -20,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request  # noqa: E402
+from fastapi import FastAPI, HTTPException  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import RedirectResponse, Response, StreamingResponse  # noqa: E402
 from genblaze_core.observability.events import (  # noqa: E402
@@ -29,9 +28,13 @@ from genblaze_core.observability.events import (  # noqa: E402
     StepCompletedEvent,
 )
 
+from app.agents.mcp import mcp_app  # noqa: E402
+from app.commerce.api import router as commerce_router  # noqa: E402
+from app.commerce.discovery import router as discovery_router  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.errors import classify  # noqa: E402
-from app.logging_setup import new_request_id, request_id_var, setup_logging  # noqa: E402
+from app.http_middleware import request_logging  # noqa: E402
+from app.logging_setup import setup_logging  # noqa: E402
 from app.repo import (  # noqa: E402
     backend,
     build_keyframe_pipeline,
@@ -45,10 +48,8 @@ from app.repo import (  # noqa: E402
 )
 from app.repo import provider_catalog as catalog  # noqa: E402
 from app.repo.composer import compose_final  # noqa: E402
-from app.thikra import initialize_database  # noqa: E402
+from app.startup import application_lifespan  # noqa: E402
 from app.thikra import router as thikra_router  # noqa: E402
-from app.thikra.database import SessionLocal  # noqa: E402
-from app.thikra.service import seed_database  # noqa: E402
 from app.types.api import MediaRequest, PromptRequest, ProviderChoice  # noqa: E402
 
 setup_logging(settings.log_level)
@@ -56,11 +57,11 @@ logger = logging.getLogger("api.main")
 
 
 # --- App -------------------------------------------------------------------
-
 app = FastAPI(
     title="Thikra — Verify-Then-Pay Creative Commerce",
     description="Mandate-aware creative procurement with bounded payment, Genblaze orchestration, B2 provenance, layered verification, and redress.",
     version="1.0.0",
+    lifespan=application_lifespan,
 )
 # Explicit origins via env (production), plus a regex that catches any
 # localhost port so Next falling back to :3001/:3002 etc. doesn't break
@@ -68,92 +69,18 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=(None if settings.app_mode.upper() == "PRODUCTION" else r"https?://localhost(:\d+)?"),
+    allow_origin_regex=(
+        None if settings.app_mode.upper() == "PRODUCTION" else r"https?://localhost(:\d+)?"
+    ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "Idempotency-Key"],
 )
 app.include_router(thikra_router)
-
-
-@app.middleware("http")
-async def request_logging(request: Request, call_next):
-    """Tag every request with an 8-char id + log entry/exit with duration.
-
-    The id is set into a ContextVar so any `logger.x(...)` from within
-    the request handler automatically carries it (see JSONFormatter).
-    Returned to the client as `X-Request-Id` so the user can quote it
-    when reporting failures.
-    """
-    rid = new_request_id()
-    token = request_id_var.set(rid)
-    start = time.perf_counter()
-    try:
-        response = await call_next(request)
-    except Exception:
-        logger.exception("request crashed", extra={
-            "method": request.method, "path": request.url.path,
-            "duration_ms": int((time.perf_counter() - start) * 1000),
-        })
-        request_id_var.reset(token)
-        raise
-    duration_ms = int((time.perf_counter() - start) * 1000)
-    response.headers["X-Request-Id"] = rid
-    logger.info("request", extra={
-        "method": request.method, "path": request.url.path,
-        "status": response.status_code, "duration_ms": duration_ms,
-    })
-    request_id_var.reset(token)
-    return response
-
-
-@app.on_event("startup")
-async def _log_startup() -> None:
-    """Log the resolved configuration once at boot — non-secret only.
-
-    Surfaces the actual values pydantic-settings loaded (which may
-    differ from `.env.example` defaults), so config drift is visible
-    in the logs immediately.
-    """
-    if settings.app_mode.upper() == "PRODUCTION":
-        required = {
-            "SESSION_SECRET": settings.session_secret != "demo-only-change-me",
-            "PRAVA_SECRET_KEY": bool(settings.prava_secret_key),
-            "PRAVA_PUBLISHABLE_KEY": bool(settings.prava_publishable_key),
-            "B2_BUCKET_NAME": bool(settings.b2_bucket_name),
-        }
-        missing = [name for name, valid in required.items() if not valid]
-        if missing:
-            raise RuntimeError(f"Production configuration is incomplete: {', '.join(missing)}")
-    initialize_database()
-    with SessionLocal() as db:
-        seed_database(db)
-    logger.info("api startup", extra={
-        "app_mode": settings.app_mode.upper(),
-        "b2_region": settings.b2_region,
-        "b2_bucket": settings.b2_bucket_name,
-        "chat_model": settings.chat_model,
-        "image_model": settings.image_model,
-        "video_provider": settings.video_provider,
-        "video_model": settings.video_model,
-        "gmi_video_model": settings.gmi_video_model,
-        "tts_model": settings.tts_model,
-        "music_model": settings.music_model,
-        "cors_origins": settings.cors_origins,
-        "providers_configured": {
-            "openai": bool(settings.openai_api_key),
-            "replicate": bool(settings.replicate_api_token),
-            "google": bool(settings.google_api_key),
-            "nvidia": bool(settings.nvidia_api_key),
-            "decart": bool(settings.decart_api_key),
-            "gmi": bool(settings.gmi_api_key),
-            "runway": bool(settings.runway_api_secret),
-            "luma": bool(settings.luma_api_key),
-            "elevenlabs": bool(settings.elevenlabs_api_key),
-            "lmnt": bool(settings.lmnt_api_key),
-            "hume": bool(settings.hume_api_key),
-        },
-    })
+app.include_router(commerce_router)
+app.include_router(discovery_router)
+app.mount("/mcp", mcp_app)
+app.middleware("http")(request_logging)
 
 
 _sse_log = logging.getLogger("api.sse")
@@ -173,16 +100,19 @@ def _sse(payload: dict) -> str:
             ev = log_payload.get("event", {})
             if isinstance(ev, dict):
                 log_payload["event"] = {
-                    k: ev.get(k) for k in ("type", "step_index", "model", "timestamp")
-                    if k in ev
+                    k: ev.get(k) for k in ("type", "step_index", "model", "timestamp") if k in ev
                 }
         _sse_log.debug("sse out", extra={"payload": log_payload})
     return f"data: {json.dumps(payload, default=str)}\n\n"
 
 
 async def _stream_stage(
-    pipeline, stage: str, *, timeout: int,
-    fail_fast: bool = True, raise_on_failure: bool = True,
+    pipeline,
+    stage: str,
+    *,
+    timeout: int,
+    fail_fast: bool = True,
+    raise_on_failure: bool = True,
 ):
     """Run a pipeline via `astream()` and yield (sse_string, captured_result).
 
@@ -206,34 +136,52 @@ async def _stream_stage(
     stage_log = logging.getLogger("api.stream_stage")
     stage_log.info("stage start", extra={"stage": stage, "timeout_sec": timeout})
     async for evt in pipeline.astream(
-        sink=sink(), timeout=timeout,
-        fail_fast=fail_fast, raise_on_failure=raise_on_failure,
+        sink=sink(),
+        timeout=timeout,
+        fail_fast=fail_fast,
+        raise_on_failure=raise_on_failure,
     ):
         evt_type = getattr(evt, "type", evt.__class__.__name__)
-        stage_log.debug("event", extra={
-            "stage": stage, "event_type": evt_type,
-            "step_index": getattr(evt, "step_index", None),
-            "model": getattr(evt, "model", None),
-        })
-        yield _sse({"kind": "stream", "stage": stage, "event": evt.model_dump(mode="json")}), captured
+        stage_log.debug(
+            "event",
+            extra={
+                "stage": stage,
+                "event_type": evt_type,
+                "step_index": getattr(evt, "step_index", None),
+                "model": getattr(evt, "model", None),
+            },
+        )
+        yield (
+            _sse({"kind": "stream", "stage": stage, "event": evt.model_dump(mode="json")}),
+            captured,
+        )
         # NB: this reads `evt.step` off the LIVE in-process event object —
         # `step` is `exclude=True`, so it's dropped by the `model_dump` above
         # and is `None` on any re-parsed/wire copy. The `evt.step.assets`
         # truthiness guard also makes the `[0]` index safe on an assetless step.
         if isinstance(evt, StepCompletedEvent) and evt.step and evt.step.assets:
             asset = evt.step.assets[0]
-            stage_log.info("step completed", extra={
-                "stage": stage, "step_index": evt.step_index,
-                "model": getattr(evt, "model", None),
-                "size_bytes": getattr(asset, "size_bytes", None),
-            })
-            yield _sse({
-                "kind": "scene.asset",
-                "stage": stage,
-                "step_index": evt.step_index,
-                "asset_url": asset.url,        # durable URL — frontend hits /assets/{key}
-                "media_type": asset.media_type,
-            }), captured
+            stage_log.info(
+                "step completed",
+                extra={
+                    "stage": stage,
+                    "step_index": evt.step_index,
+                    "model": getattr(evt, "model", None),
+                    "size_bytes": getattr(asset, "size_bytes", None),
+                },
+            )
+            yield (
+                _sse(
+                    {
+                        "kind": "scene.asset",
+                        "stage": stage,
+                        "step_index": evt.step_index,
+                        "asset_url": asset.url,  # durable URL — frontend hits /assets/{key}
+                        "media_type": asset.media_type,
+                    }
+                ),
+                captured,
+            )
         # Capture the run result from EITHER terminal event. A best-effort
         # stage (raise_on_failure=False) that ends with status=FAILED emits a
         # `PipelineFailedEvent` — NOT `PipelineCompletedEvent` — but its result
@@ -242,18 +190,25 @@ async def _stream_stage(
         # from what survived; the composer decides essential (video, with a
         # keyframe-still fallback) vs best-effort (audio). Strict stages raise
         # after this event, so the captured result is superseded by the error.
-        if isinstance(evt, (PipelineCompletedEvent, PipelineFailedEvent)) and evt.result is not None:
+        if (
+            isinstance(evt, (PipelineCompletedEvent, PipelineFailedEvent))
+            and evt.result is not None
+        ):
             captured = evt.result
-            stage_log.info("stage complete", extra={
-                "stage": stage,
-                "run_status": str(getattr(evt.result.run, "status", None)),
-                "run_id": getattr(evt.result.run, "run_id", None),
-                "step_count": len(evt.result.run.steps),
-            })
+            stage_log.info(
+                "stage complete",
+                extra={
+                    "stage": stage,
+                    "run_status": str(getattr(evt.result.run, "status", None)),
+                    "run_id": getattr(evt.result.run, "run_id", None),
+                    "step_count": len(evt.result.run.steps),
+                },
+            )
             yield _sse({"kind": "stage.complete", "stage": stage}), captured
 
 
 # --- Endpoints -------------------------------------------------------------
+
 
 @lru_cache(maxsize=1)
 def _ffmpeg_present() -> bool:
@@ -324,10 +279,15 @@ def _resolve_choice(slot: str, choice: ProviderChoice) -> tuple[catalog.CatalogE
     try:
         entry = catalog.resolve(slot, choice.vendor)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail={
-            "code": "bad_selection", "retryable": False, "message": str(exc),
-            "hint": f"Pick a vendor listed under '{slot}' in GET /providers.",
-        }) from exc
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "bad_selection",
+                "retryable": False,
+                "message": str(exc),
+                "hint": f"Pick a vendor listed under '{slot}' in GET /providers.",
+            },
+        ) from exc
     return entry, (choice.model or entry.default_model)
 
 
@@ -339,11 +299,14 @@ def create_storyboard(req: PromptRequest):
     SSE `error` frame uses) so the client can show an actionable message + hint
     instead of a raw 500 / `Internal Server Error`.
     """
-    logger.info("storyboard endpoint", extra={
-        "endpoint": "POST /runs/storyboard",
-        "prompt_chars": len(req.prompt),
-        "prompt_preview": req.prompt[:240],
-    })
+    logger.info(
+        "storyboard endpoint",
+        extra={
+            "endpoint": "POST /runs/storyboard",
+            "prompt_chars": len(req.prompt),
+            "prompt_preview": req.prompt[:240],
+        },
+    )
     try:
         spec, storyboard_key = generate_storyboard(req.prompt)
     except Exception as exc:
@@ -373,24 +336,28 @@ def stream_media(req: MediaRequest):
     video_entry, video_model = _resolve_choice(catalog.VIDEO, sel.video)
     tts_entry, tts_model = _resolve_choice(catalog.TTS, sel.tts)
     music_entry, music_model = _resolve_choice(catalog.MUSIC, sel.music)
-    log.info("media stream endpoint", extra={
-        "endpoint": "POST /runs/media/stream",
-        "prompt_chars": len(req.prompt),
-        "prompt_preview": req.prompt[:240],
-        "spec_provided": req.spec is not None,
-        "scene_count": len(req.spec.scenes) if req.spec else None,
-        "selection": {
-            "chat": f"{chat_entry.vendor}/{chat_model}",
-            "image": f"{image_entry.vendor}/{image_model}",
-            "video": f"{video_entry.vendor}/{video_model}",
-            "tts": f"{tts_entry.vendor}/{tts_model}",
-            "music": f"{music_entry.vendor}/{music_model}",
+    log.info(
+        "media stream endpoint",
+        extra={
+            "endpoint": "POST /runs/media/stream",
+            "prompt_chars": len(req.prompt),
+            "prompt_preview": req.prompt[:240],
+            "spec_provided": req.spec is not None,
+            "scene_count": len(req.spec.scenes) if req.spec else None,
+            "selection": {
+                "chat": f"{chat_entry.vendor}/{chat_model}",
+                "image": f"{image_entry.vendor}/{image_model}",
+                "video": f"{video_entry.vendor}/{video_model}",
+                "tts": f"{tts_entry.vendor}/{tts_model}",
+                "music": f"{music_entry.vendor}/{music_model}",
+            },
         },
-    })
+    )
     # Snap scene durations to the selected video provider's grid (e.g. Kling
     # renders 5s/10s only) so B2 and the composer share one clip-length truth.
     spec = snap_scene_durations(
-        req.spec or generate_storyboard(req.prompt, chat_model)[0], video_entry,
+        req.spec or generate_storyboard(req.prompt, chat_model)[0],
+        video_entry,
     )
 
     async def gen():
@@ -408,13 +375,20 @@ def stream_media(req: MediaRequest):
             b0_result = None
             async for frame, captured in _stream_stage(
                 build_reference_pipeline(spec, image_entry, image_model),
-                current_stage, timeout=240,
+                current_stage,
+                timeout=240,
             ):
                 yield frame
                 if captured is not None:
                     b0_result = captured
             if b0_result is None:
-                yield _sse({"kind": "error", "stage": current_stage, "message": "no pipeline result captured"})
+                yield _sse(
+                    {
+                        "kind": "error",
+                        "stage": current_stage,
+                        "message": "no pipeline result captured",
+                    }
+                )
                 return
 
             # Stage B1 — keyframe fan-out (one image per scene), seeded
@@ -424,13 +398,20 @@ def stream_media(req: MediaRequest):
             b1_result = None
             async for frame, captured in _stream_stage(
                 build_keyframe_pipeline(spec, image_entry, image_model, b0_result),
-                current_stage, timeout=600,
+                current_stage,
+                timeout=600,
             ):
                 yield frame
                 if captured is not None:
                     b1_result = captured
             if b1_result is None:
-                yield _sse({"kind": "error", "stage": current_stage, "message": "no pipeline result captured"})
+                yield _sse(
+                    {
+                        "kind": "error",
+                        "stage": current_stage,
+                        "message": "no pipeline result captured",
+                    }
+                )
                 return
 
             # Stage B2 — image-to-video + TTS + music. Cross-pipeline image
@@ -444,19 +425,31 @@ def stream_media(req: MediaRequest):
             b2_result = None
             async for frame, captured in _stream_stage(
                 build_media_pipeline(
-                    spec, b1_result,
-                    video_entry=video_entry, video_model=video_model,
-                    tts_entry=tts_entry, tts_model=tts_model,
-                    music_entry=music_entry, music_model=music_model,
+                    spec,
+                    b1_result,
+                    video_entry=video_entry,
+                    video_model=video_model,
+                    tts_entry=tts_entry,
+                    tts_model=tts_model,
+                    music_entry=music_entry,
+                    music_model=music_model,
                 ),
-                current_stage, timeout=900,
-                fail_fast=False, raise_on_failure=False,
+                current_stage,
+                timeout=900,
+                fail_fast=False,
+                raise_on_failure=False,
             ):
                 yield frame
                 if captured is not None:
                     b2_result = captured
             if b2_result is None:
-                yield _sse({"kind": "error", "stage": current_stage, "message": "no pipeline result captured"})
+                yield _sse(
+                    {
+                        "kind": "error",
+                        "stage": current_stage,
+                        "message": "no pipeline result captured",
+                    }
+                )
                 return
 
             # Stage C — compose (sync ffmpeg, off the event loop). AGENTS Rule 6
@@ -469,7 +462,10 @@ def stream_media(req: MediaRequest):
             # Pass the Stage B1 keyframe result so the composer can substitute a
             # scene's keyframe still for any failed video clip.
             final_asset, notices = await asyncio.to_thread(
-                compose_final, b2_result, b1_result, spec,
+                compose_final,
+                b2_result,
+                b1_result,
+                spec,
             )
             for message in notices:
                 yield _sse({"kind": "notice", "stage": "B2.media", "message": message})
@@ -478,13 +474,15 @@ def stream_media(req: MediaRequest):
             # canonical_hash). We surface it to the client so the user can
             # open and inspect the verification artifact alongside the MP4.
             manifest_uri = getattr(b2_result.manifest, "manifest_uri", None)
-            yield _sse({
-                "kind": "compose.complete",
-                "asset": final_asset.model_dump(mode="json"),
-                "spec": spec.model_dump(mode="json"),
-                "run_id": b2_result.run.run_id,
-                "manifest_uri": manifest_uri,
-            })
+            yield _sse(
+                {
+                    "kind": "compose.complete",
+                    "asset": final_asset.model_dump(mode="json"),
+                    "spec": spec.model_dump(mode="json"),
+                    "run_id": b2_result.run.run_id,
+                    "manifest_uri": manifest_uri,
+                }
+            )
         except Exception as exc:
             # logger.exception emits the full traceback to the [api] log so the
             # engineer can diagnose; the SSE frame carries the *classified*
@@ -492,14 +490,16 @@ def stream_media(req: MediaRequest):
             # can offer the right recovery — never a raw Exception repr.
             log.exception("stream_media failed at stage=%s", current_stage)
             ce = classify(exc)
-            yield _sse({
-                "kind": "error",
-                "stage": current_stage,
-                "code": ce.code,
-                "retryable": ce.retryable,
-                "message": ce.message,
-                "hint": ce.hint,
-            })
+            yield _sse(
+                {
+                    "kind": "error",
+                    "stage": current_stage,
+                    "code": ce.code,
+                    "retryable": ce.retryable,
+                    "message": ce.message,
+                    "hint": ce.hint,
+                }
+            )
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

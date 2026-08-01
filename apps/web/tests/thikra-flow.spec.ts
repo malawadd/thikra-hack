@@ -9,6 +9,7 @@ test('Noura Glow verify-then-pay demo reaches evidence-backed approval', async (
   await expect(page.getByText('Backend evidence online')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('heading', { name: 'Creative commerce, with receipts.' })).toBeVisible();
   await page.getByRole('link', { name: /Start a creative brief/ }).click();
+  await page.waitForURL('**/briefs/new');
   await waitForHydration(page);
   await expect(page.getByRole('heading', { name: 'Creative objective' })).toBeVisible();
   await page.getByRole('button', { name: /Continue/ }).click();
@@ -49,4 +50,40 @@ test('Noura Glow verify-then-pay demo reaches evidence-backed approval', async (
   await page.getByLabel('Resolution').fill('Narration was retried, reverified, and approved by the principal.');
   await page.getByRole('button', { name: /Save case/ }).click();
   await expect(page.getByText(/Resolved/).first()).toBeVisible();
+});
+
+test('human marketplace order reaches signed verified delivery', async ({ page }) => {
+  await page.goto('/services');
+  await waitForHydration(page);
+  await expect(page.getByRole('heading', { name: 'Outcomes an agent can actually buy.' })).toBeVisible();
+  await expect(page.locator('.service-card')).toHaveCount(6);
+  const flagship = page.locator('.service-card').filter({ hasText: 'Complete Vertical Advertisement' });
+  await expect(flagship.getByText('$5.00')).toBeVisible();
+  await flagship.getByRole('link', { name: /Inspect & request quote/ }).click();
+  await page.waitForURL('**/services/verified-vertical-ad');
+  await expect(page.getByRole('heading', { name: 'Complete Vertical Advertisement' })).toBeVisible();
+  await page.getByRole('button', { name: 'Request quote' }).click();
+  await expect(page.getByText('Quoted total')).toBeVisible();
+  await page.getByRole('button', { name: 'Accept quote & create order' }).click();
+  await page.getByRole('link', { name: 'Continue to payment' }).click();
+  await expect(page.getByRole('button', { name: 'Create bounded authorization' })).toBeVisible();
+  await page.getByRole('button', { name: 'Create bounded authorization' }).click();
+  await page.getByRole('button', { name: 'Approve simulated demo payment' }).click();
+  await page.getByRole('button', { name: 'Start paid fulfillment' }).click();
+  await page.getByRole('button', { name: /Retry failed component/ }).click();
+  await expect(page.getByText('Verified deliverables')).toBeVisible();
+  await expect(page.getByText('Signed payment-to-delivery receipt')).toBeVisible();
+});
+
+test('marketplace remains usable at a mobile viewport', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/services');
+  await waitForHydration(page);
+  await expect(page.getByRole('heading', { name: 'Outcomes an agent can actually buy.' })).toBeVisible();
+  await expect(page.locator('.service-card')).toHaveCount(6);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await expect(page.getByRole('navigation').getByRole('link', { name: 'Marketplace' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('marketplace-mobile.png'), fullPage: true });
 });

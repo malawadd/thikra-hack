@@ -1,0 +1,13 @@
+{
+  "name": "@thikra/agent-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "tsx src/index.ts", "demo": "tsx src/index.ts --approve-demo", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@thikra/sdk": "workspace:*",
+    "openai": "6.49.0"
+  },
+  "devDependencies": { "tsx": "^4.20.0", "typescript": "^5.7.2", "@types/node": "^22.10.2" }
+}

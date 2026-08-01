@@ -54,13 +54,27 @@ Prava's official skill currently documents session creation, secure iframe autho
 ```text
 pnpm setup             install frontend and API dependencies
 pnpm dev               run SvelteKit :43191 and FastAPI :43192
+pnpm dev:agent         run the separate external buyer agent
+pnpm demo:agent        run the isolated MCP-to-delivery demonstration
+pnpm demo:human        run the human marketplace demonstration
+pnpm seed:commerce     seed the commerce catalog and demo developer identity
 pnpm build             build the SvelteKit Node application
 pnpm lint              ESLint + Ruff
 pnpm typecheck         svelte-check
 pnpm test              backend and frontend unit/integration tests
+pnpm test:commerce     commercial domain, REST, and MCP tests
+pnpm test:mcp          real MCP-client integration test
 pnpm test:e2e          Playwright end-to-end demo
 pnpm check:structure   frontend and backend architectural guards
 ```
+
+## Agent-accessible creative commerce
+
+External agents discover Thikra through `/.well-known/thikra-services.json`, the A2A Agent Card, UCP profile, OpenAPI, or authenticated MCP at `/mcp/`. Commerce is a layer above generation:
+
+`ServiceOffer → Quote → CommercialOrder → authorization → payment → FulfillmentJob → existing GenerationRun → verified Deliverable → signed DeliveryReceipt → dispute/redress`.
+
+Six services are visible at `/services`; integration guidance is at `/developers`; authenticated orders are at `/commercial-orders`. The separate `apps/agent-client` proves the contract using the official MCP client and local `@thikra/sdk`. See the [external agent demo](docs/demo/EXTERNAL_AGENT_DEMO.md), [REST guide](docs/agent-gateway/REST.md), and [MCP guide](docs/agent-gateway/MCP.md).
 
 ## Architecture
 
@@ -80,9 +94,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [data model](docs/architecture/data-mode
 
 ```text
 apps/web/                 active SvelteKit product and Playwright test
+apps/agent-client/        external MCP/REST buyer-agent demonstration
+packages/thikra-sdk/      local typed TypeScript commerce client
 reference/next-web/       archived original UI, excluded from workspace
 services/api/app/repo/    preserved provider catalog, Genblaze pipelines, composer
 services/api/app/thikra/  mandate, payment, run, verification, evidence, cases
+services/api/app/commerce catalog, quotes, orders, delivery, webhooks
+services/api/app/agents/  shared gateway facade and MCP adapter
 services/api/migrations/  Alembic migration
 docs/                     architecture, integrations, demo, submissions
 scripts/                  cross-platform setup and task runners

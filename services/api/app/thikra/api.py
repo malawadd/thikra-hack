@@ -968,6 +968,18 @@ def audit_timeline(run_id: str | None = None, db: Session = Depends(get_db)):
 
 @router.get("/thikra/evidence/graph")
 def evidence_graph(run_id: str | None = None, db: Session = Depends(get_db)):
+    from app.commerce.models import (
+        BuyerAgent,
+        BuyerPrincipal,
+        CommercialOrder,
+        Deliverable,
+        DeliveryReceipt,
+        Dispute,
+        FulfillmentJob,
+        Quote,
+        ServiceOffer,
+    )
+
     run = (
         db.get(GenerationRun, run_id)
         if run_id
@@ -1055,6 +1067,134 @@ def evidence_graph(run_id: str | None = None, db: Session = Depends(get_db)):
     ]
     edges += [{"source": "verification", "target": "approval", "label": "requests"}]
     edges += [{"source": "verification", "target": case.id, "label": "opens"} for case in cases]
+    job = db.scalar(select(FulfillmentJob).where(FulfillmentJob.generation_run_id == run.id))
+    if job:
+        order = db.get(CommercialOrder, job.order_id)
+        quote = db.get(Quote, order.quote_id)
+        offer = db.get(ServiceOffer, order.service_offer_id)
+        agent = db.get(BuyerAgent, order.buyer_agent_id)
+        principal = db.get(BuyerPrincipal, order.buyer_principal_id)
+        payment = db.get(PaymentRecord, run.payment_record_id)
+        deliverables = list(db.scalars(select(Deliverable).where(Deliverable.order_id == order.id)))
+        receipt = db.scalar(select(DeliveryReceipt).where(DeliveryReceipt.order_id == order.id))
+        disputes = list(db.scalars(select(Dispute).where(Dispute.order_id == order.id)))
+        commercial_nodes = [
+            {
+                "id": principal.id,
+                "label": principal.display_name,
+                "kind": "buyer principal",
+                "detail": principal.verification_status,
+                "group": "commercial",
+            },
+            {
+                "id": agent.id,
+                "label": agent.name,
+                "kind": "buyer agent",
+                "detail": agent.trust_status,
+                "group": "commercial",
+            },
+            {
+                "id": offer.id,
+                "label": offer.name,
+                "kind": "service version",
+                "detail": f"{offer.slug} v{order.service_version}",
+                "group": "commercial",
+                "url": f"/services/{offer.slug}",
+            },
+            {
+                "id": quote.id,
+                "label": "Commercial quote",
+                "kind": "quote",
+                "detail": f"{quote.total_minor} {quote.currency} minor units",
+                "group": "commercial",
+            },
+            {
+                "id": order.id,
+                "label": order.public_order_number,
+                "kind": "order",
+                "detail": order.status,
+                "group": "commercial",
+                "url": f"/orders/{order.public_order_number}",
+            },
+            {
+                "id": payment.id,
+                "label": "Customer payment",
+                "kind": "payment",
+                "detail": payment.payment_state,
+                "group": "payment",
+                "url": f"/payments/{payment.id}",
+            },
+            {
+                "id": job.id,
+                "label": "Fulfillment job",
+                "kind": "fulfillment",
+                "detail": job.status,
+                "group": "fulfillment",
+                "url": f"/runs/{run.id}",
+            },
+        ]
+        nodes = commercial_nodes + [node for node in nodes if node["id"] != payment.id]
+        nodes += [
+            {
+                "id": item.id,
+                "label": item.name,
+                "kind": "deliverable",
+                "detail": item.verification_status,
+                "group": "media",
+                "url": f"/orders/{order.public_order_number}",
+            }
+            for item in deliverables
+        ]
+        if receipt:
+            nodes.append(
+                {
+                    "id": receipt.id,
+                    "label": "Delivery receipt",
+                    "kind": "receipt",
+                    "detail": receipt.receipt_hash[:12],
+                    "group": "payment",
+                    "url": f"/orders/{order.public_order_number}",
+                }
+            )
+        nodes += [
+            {
+                "id": item.id,
+                "label": "Commercial dispute",
+                "kind": "dispute",
+                "detail": item.status,
+                "group": "redress",
+                "url": f"/orders/{order.public_order_number}",
+            }
+            for item in disputes
+        ]
+        edges = [
+            {"source": principal.id, "target": agent.id, "label": "PRINCIPAL_CONTROLS_AGENT"},
+            {"source": agent.id, "target": quote.id, "label": "AGENT_REQUESTED_QUOTE"},
+            {"source": quote.id, "target": offer.id, "label": "QUOTE_REFERENCES_SERVICE"},
+            {"source": quote.id, "target": order.id, "label": "QUOTE_CREATED_ORDER"},
+            {"source": order.id, "target": payment.id, "label": "ORDER_AUTHORIZED_PAYMENT"},
+            {"source": payment.id, "target": job.id, "label": "PAYMENT_FUNDED_ORDER"},
+            {"source": job.id, "target": run.mandate_id, "label": "ORDER_CREATED_MANDATE"},
+            {"source": job.id, "target": run.id, "label": "FULFILLMENT_CREATED_RUN"},
+            *edges,
+        ]
+        edges += [
+            {"source": item.asset_id, "target": item.id, "label": "ASSET_BECAME_DELIVERABLE"}
+            for item in deliverables
+        ]
+        if receipt:
+            edges += [
+                {
+                    "source": item.id,
+                    "target": receipt.id,
+                    "label": "DELIVERABLE_INCLUDED_IN_RECEIPT",
+                }
+                for item in deliverables
+            ]
+        edges += [
+            {"source": order.id, "target": item.id, "label": "ORDER_OPENED_DISPUTE"}
+            for item in disputes
+        ]
     return {"run_id": run.id, "nodes": nodes, "edges": edges}
 
 

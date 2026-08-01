@@ -1,10 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const databasePath = path.join(tmpdir(), `thikra-e2e-${process.pid}.db`).replaceAll('\\', '/');
+const e2eEnv = { ...process.env, APP_MODE: 'DEMO', DATABASE_URL: `sqlite:///${databasePath}`, THIKRA_DATA_DIR: path.join(tmpdir(), `thikra-e2e-evidence-${process.pid}`), THIKRA_API_BASE_URL: 'http://127.0.0.1:43292', PUBLIC_WEB_URL: 'http://127.0.0.1:43191', ORIGIN: 'http://127.0.0.1:43191', THIKRA_DEMO_API_KEY: 'thikra_test_demo_local_only' };
 const api = spawn(process.platform === 'win32' ? 'uv.exe' : 'uv', ['run', 'uvicorn', 'app.main:app', '--port', '43292'], {
-  cwd: path.join(root, 'services', 'api'), stdio: 'inherit'
+  cwd: path.join(root, 'services', 'api'), stdio: 'inherit', env: e2eEnv
 });
 
 let apiReady = false;
@@ -22,9 +25,9 @@ if (!apiReady) {
   throw new Error('Thikra API did not become ready before the E2E timeout.');
 }
 
-const web = spawn(process.execPath, [path.join(root, 'apps', 'web', 'node_modules', 'vite', 'bin', 'vite.js'), 'dev', '--host', '127.0.0.1', '--port', '43191'], {
+const web = spawn(process.execPath, [path.join(root, 'apps', 'web', 'build', 'index.js')], {
   cwd: path.join(root, 'apps', 'web'), stdio: 'inherit',
-  env: { ...process.env, API_INTERNAL_URL: 'http://127.0.0.1:43292' }
+  env: { ...e2eEnv, API_INTERNAL_URL: 'http://127.0.0.1:43292', HOST: '127.0.0.1', PORT: '43191' }
 });
 const stopChild = (child) => {
   if (!child.pid) return;

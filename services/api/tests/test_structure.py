@@ -41,9 +41,17 @@ def test_genblaze_provider_imports_confined() -> None:
     imports `genblaze_core` types only (Asset/Manifest/Mp4Handler) — never a
     Pipeline/Provider; core/s3 are storage layers, not in `provider_roots`."""
     provider_roots = {
-        "genblaze_openai", "genblaze_google", "genblaze_decart", "genblaze_nvidia",
-        "genblaze_gmicloud", "genblaze_replicate", "genblaze_runway", "genblaze_luma",
-        "genblaze_elevenlabs", "genblaze_lmnt", "genblaze_hume",
+        "genblaze_openai",
+        "genblaze_google",
+        "genblaze_decart",
+        "genblaze_nvidia",
+        "genblaze_gmicloud",
+        "genblaze_replicate",
+        "genblaze_runway",
+        "genblaze_luma",
+        "genblaze_elevenlabs",
+        "genblaze_lmnt",
+        "genblaze_hume",
     }
     offenders: list[str] = []
     allowed = {
@@ -58,7 +66,9 @@ def test_genblaze_provider_imports_confined() -> None:
             if isinstance(node, ast.ImportFrom):
                 root = (node.module or "").split(".")[0]
                 if root in provider_roots:
-                    offenders.append(f"{path.relative_to(APP_ROOT)}:{node.lineno} imports {node.module}")
+                    offenders.append(
+                        f"{path.relative_to(APP_ROOT)}:{node.lineno} imports {node.module}"
+                    )
     assert not offenders, f"Provider imports outside the catalog/pipelines: {offenders}"
 
 
@@ -73,9 +83,12 @@ def test_blocking_b2_endpoints_are_sync_def() -> None:
     via `asyncio.to_thread`, so it is intentionally excluded here.
     """
     must_be_sync = {
-        "health", "list_run_assets", "list_files", "get_asset",
+        "health",
+        "list_run_assets",
+        "list_files",
+        "get_asset",
         "create_storyboard",  # blocking OpenAI chat + B2 put, up front
-        "get_providers",      # trivial dict build — no event loop needed
+        "get_providers",  # trivial dict build — no event loop needed
     }
     tree = ast.parse((APP_ROOT / "main.py").read_text())
     offenders = [
@@ -143,6 +156,46 @@ def test_main_line_budget() -> None:
     # selection resolver (`_resolve_choice`), and threading the resolved
     # provider entries into the three build_* calls + startup/health key dicts.
     assert len(lines) < 580, f"main.py is {len(lines)} lines — budget is 580"
+
+
+def test_mcp_is_a_transport_over_the_gateway_facade() -> None:
+    source = (APP_ROOT / "agents" / "mcp.py").read_text()
+    forbidden = ["app.thikra.database", "app.commerce.models", "sqlalchemy", "SessionLocal"]
+    assert not [name for name in forbidden if name in source]
+    assert "from app.agents import gateway" in source
+    assert "get_access_token" in source
+
+
+def test_commerce_secrets_are_not_persistence_columns_or_mcp_outputs() -> None:
+    models = (APP_ROOT / "commerce" / "models.py").read_text()
+    mcp = (APP_ROOT / "agents" / "mcp.py").read_text()
+    assert "hashed_secret" in models
+    assert "plaintext_api_key" not in models
+    assert "prava_secret_key" not in models
+    assert "b2_application_key" not in models
+    assert "session_token" not in mcp
+    assert "private_key" not in mcp
+
+
+def test_commercial_fulfillment_and_private_order_guards_are_explicit() -> None:
+    fulfillment = (APP_ROOT / "commerce" / "fulfillment.py").read_text()
+    api = (APP_ROOT / "commerce" / "api.py").read_text()
+    assert 'order.status != "PAID"' in fulfillment
+    assert "verification failures remain" in fulfillment
+    assert fulfillment.index("_create_delivery_package(db, order, job, run)") < fulfillment.index(
+        '"DELIVERED"'
+    )
+    assert "require_order_owner(db, auth, item)" in api
+
+
+def test_active_svelte_pages_have_no_coming_soon_copy() -> None:
+    web_routes = APP_ROOT.parents[2] / "apps" / "web" / "src" / "routes"
+    offenders = [
+        path
+        for path in web_routes.rglob("*.svelte")
+        if "coming soon" in path.read_text(encoding="utf-8").lower()
+    ]
+    assert offenders == []
 
 
 def test_provider_catalog_line_budget() -> None:

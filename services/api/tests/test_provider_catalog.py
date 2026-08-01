@@ -36,7 +36,9 @@ def test_catalog_covers_every_slot() -> None:
     assert all(pc.CATALOG[slot] for slot in pc.CATALOG)
 
 
-@pytest.mark.parametrize(("slot", "vendor", "entry"), _PROVIDER_ENTRIES, ids=_ids(_PROVIDER_ENTRIES))
+@pytest.mark.parametrize(
+    ("slot", "vendor", "entry"), _PROVIDER_ENTRIES, ids=_ids(_PROVIDER_ENTRIES)
+)
 def test_entry_constructs_a_provider(slot, vendor, entry) -> None:
     """`make()` builds a BaseProvider with no network (keys default to empty)."""
     prov = entry.make()
@@ -45,7 +47,9 @@ def test_entry_constructs_a_provider(slot, vendor, entry) -> None:
     assert entry.modality is not None
 
 
-@pytest.mark.parametrize(("slot", "vendor", "entry"), _PROVIDER_ENTRIES, ids=_ids(_PROVIDER_ENTRIES))
+@pytest.mark.parametrize(
+    ("slot", "vendor", "entry"), _PROVIDER_ENTRIES, ids=_ids(_PROVIDER_ENTRIES)
+)
 def test_default_model_is_valid_for_its_family(slot, vendor, entry) -> None:
     """For providers that declare model families, the curated `default_model`
     must match one (offline). Replicate/LMNT declare no families (they accept
@@ -78,7 +82,12 @@ def test_matrix_shape_and_key_available_is_bool() -> None:
     assert set(m) == set(pc.CATALOG)
     for _slot, rows in m.items():
         for row in rows:
-            assert {"vendor", "default_model", "suggested_models", "modality",
-                    "key_available"} <= row.keys()
+            assert {
+                "vendor",
+                "default_model",
+                "suggested_models",
+                "modality",
+                "key_available",
+            } <= row.keys()
             assert isinstance(row["key_available"], bool)
             assert isinstance(row["suggested_models"], list)

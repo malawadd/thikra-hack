@@ -1,0 +1,15 @@
+<script lang="ts">
+  import { onMount } from 'svelte'; import WebhookIcon from 'lucide-svelte/icons/webhook';
+  import PageHeader from '$lib/components/PageHeader.svelte'; import AsyncState from '$lib/components/AsyncState.svelte'; import { api, shortDate } from '$lib/api/client';
+  let subscriptions=$state<any[]>([]);let loading=$state(true);let error=$state('');let callback=$state('https://hooks.example.com/thikra');let secret=$state('');
+  const events=['order.paid','order.fulfillment_started','order.review_required','order.ready','order.delivered','order.failed','order.disputed'];
+  onMount(load);async function load(){try{subscriptions=(await api<{items:any[]}>('/api/v1/webhooks/subscriptions')).items;}catch(cause){error=cause instanceof Error?cause.message:String(cause);}finally{loading=false;}}
+  async function create(){error='';try{const result:any=await api('/api/v1/webhooks/subscriptions',{method:'POST',body:JSON.stringify({callback_url:callback,events})});secret=result.secret;await load();}catch(cause){error=cause instanceof Error?cause.message:String(cause);}}
+  async function disable(id:string){await api(`/api/v1/webhooks/subscriptions/${id}`,{method:'DELETE'});await load();}
+</script>
+<PageHeader eyebrow="Asynchronous Agent Gateway" title="Signed webhook delivery." description="HMAC signatures, replay windows, DNS/IP SSRF validation, bounded exponential retries, and delivery-attempt evidence protect callbacks without blocking fulfillment.">
+  {#snippet actions()}<a class="btn btn-secondary" href="/developers/webhooks">Verification guide</a>{/snippet}
+</PageHeader>
+{#if secret}<section class="notice-secret"><WebhookIcon size={22}/><div><strong>Signing secret shown once</strong><p class="mono">{secret}</p><span>Store it in your server-side secret manager.</span></div></section>{/if}
+<section class="card card-pad" style="margin-bottom:20px"><h2>Create subscription</h2><div class="field"><label for="callback">HTTPS callback URL</label><input id="callback" bind:value={callback}/><span class="help">Local, private, link-local, credential-bearing, fragment, and unsafe DNS targets are rejected.</span></div><div class="service-tags" style="margin-block:14px">{#each events as event}<span>{event}</span>{/each}</div><button class="btn btn-primary" onclick={create}>Create signed subscription</button></section>
+<AsyncState {loading} {error}><section class="grid grid-2">{#each subscriptions as item (item.id)}<article class="card card-pad"><div class="card-head-inline"><span class="badge" data-tone={item.status==='ACTIVE'?'success':'danger'}>{item.status}</span><button class="btn btn-danger" onclick={()=>disable(item.id)}>Disable</button></div><h3 class="mono">{item.callback_url}</h3><p class="small muted">Created {shortDate(item.created_at)} · {item.delivery_attempts?.length??0} attempts</p><div class="service-tags">{#each item.events as event}<span>{event}</span>{/each}</div></article>{/each}{#if !subscriptions.length}<div class="card empty">No webhook subscriptions.</div>{/if}</section></AsyncState>

@@ -11,7 +11,7 @@
     "typecheck": "pnpm check",
     "lint": "eslint .",
     "test": "vitest run src",
-    "test:e2e": "playwright test"
+    "test:e2e": "pnpm build && playwright test"
   },
   "dependencies": {
     "@prava-sdk/core": "0.1.2",

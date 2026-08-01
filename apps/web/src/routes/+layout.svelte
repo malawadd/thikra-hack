@@ -4,7 +4,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
-  import FolderOpen from 'lucide-svelte/icons/folder-open'; import Blocks from 'lucide-svelte/icons/blocks'; import BriefcaseBusiness from 'lucide-svelte/icons/briefcase-business'; import CircleDollarSign from 'lucide-svelte/icons/circle-dollar-sign'; import FilePlus2 from 'lucide-svelte/icons/file-plus-2'; import Gauge from 'lucide-svelte/icons/gauge'; import Menu from 'lucide-svelte/icons/menu'; import Network from 'lucide-svelte/icons/network'; import PlaySquare from 'lucide-svelte/icons/square-play'; import ScrollText from 'lucide-svelte/icons/scroll-text'; import ShieldCheck from 'lucide-svelte/icons/shield-check'; import Sparkles from 'lucide-svelte/icons/sparkles'; import X from 'lucide-svelte/icons/x';
+  import FolderOpen from 'lucide-svelte/icons/folder-open'; import Blocks from 'lucide-svelte/icons/blocks'; import BriefcaseBusiness from 'lucide-svelte/icons/briefcase-business'; import CircleDollarSign from 'lucide-svelte/icons/circle-dollar-sign'; import FilePlus2 from 'lucide-svelte/icons/file-plus-2'; import Gauge from 'lucide-svelte/icons/gauge'; import Menu from 'lucide-svelte/icons/menu'; import Network from 'lucide-svelte/icons/network'; import PlaySquare from 'lucide-svelte/icons/square-play'; import ScrollText from 'lucide-svelte/icons/scroll-text'; import ShieldCheck from 'lucide-svelte/icons/shield-check'; import Sparkles from 'lucide-svelte/icons/sparkles'; import Store from 'lucide-svelte/icons/store'; import Bot from 'lucide-svelte/icons/bot'; import KeyRound from 'lucide-svelte/icons/key-round'; import Webhook from 'lucide-svelte/icons/webhook'; import X from 'lucide-svelte/icons/x';
   let { children } = $props();
   let menuOpen = $state(false);
   let mode = $state('DEMO');
@@ -17,6 +17,11 @@
   });
   const nav = [
     { href: '/', label: 'Overview', icon: Gauge },
+    { href: '/services', label: 'Marketplace', icon: Store },
+    { href: '/developers', label: 'Agent Gateway', icon: Bot },
+    { href: '/commercial-orders', label: 'Commercial Orders', icon: BriefcaseBusiness },
+    { href: '/developer-applications', label: 'Developer Apps', icon: KeyRound },
+    { href: '/webhooks', label: 'Webhooks', icon: Webhook },
     { href: '/briefs/new', label: 'New Brief', icon: FilePlus2 },
     { href: '/runs', label: 'Runs', icon: PlaySquare },
     { href: '/assets', label: 'Asset Library', icon: FolderOpen },

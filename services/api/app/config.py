@@ -18,9 +18,32 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./thikra.db"
     thikra_data_dir: str = ".thikra"
     public_web_url: str = "http://localhost:43191"
+    thikra_api_base_url: str = "http://localhost:43192"
     session_secret: str = "demo-only-change-me"
     max_generation_concurrency: int = 3
     max_run_duration_sec: int = 1800
+
+    # --- External commerce + Agent Gateway ---
+    thikra_api_key_pepper: str = "demo-api-key-pepper-change-me"
+    thikra_demo_api_key: str = "thikra_test_demo_local_only"
+    thikra_receipt_signing_private_key: str = ""
+    thikra_receipt_signing_public_key: str = ""
+    thikra_receipt_signing_key_id: str = "thikra-demo-ed25519-2026"
+    thikra_webhook_signing_secret: str = "demo-webhook-secret-change-me"
+    thikra_webhook_max_attempts: int = 5
+    thikra_webhook_timeout_seconds: int = 10
+    thikra_quote_ttl_seconds: int = 900
+    thikra_rate_limit_requests: int = 120
+    thikra_quote_rate_limit_requests: int = 30
+    thikra_rate_limit_window_seconds: int = 60
+    thikra_default_currency: str = "USD"
+    thikra_platform_margin_bps: int = 1200
+    thikra_storage_fee_minor: int = 20
+    thikra_verification_fee_minor: int = 75
+    thikra_merchant_name: str = "Thikra Creative Services"
+    thikra_merchant_url: str = "https://thikra.example"
+    thikra_merchant_country_code: str = "SA"
+    thikra_webhook_development_allowlist: str = ""
 
     # --- Prava ---
     prava_backend_url: str = "https://sandbox.api.prava.space"
@@ -52,12 +75,12 @@ class Settings(BaseSettings):
     # (`/providers` reports `key_available`). The constructor kwarg differs by
     # vendor (api_token / api_secret / auth_token / api_key) — the catalog
     # factory passes the right one; these field names are OUR env contract.
-    replicate_api_token: str = ""   # multi-modal: image + video + music
-    runway_api_secret: str = ""     # video (Runway Gen)
-    luma_api_key: str = ""          # video (Luma Dream Machine)
-    elevenlabs_api_key: str = ""    # TTS
-    lmnt_api_key: str = ""          # TTS
-    hume_api_key: str = ""          # TTS (Hume Octave)
+    replicate_api_token: str = ""  # multi-modal: image + video + music
+    runway_api_secret: str = ""  # video (Runway Gen)
+    luma_api_key: str = ""  # video (Luma Dream Machine)
+    elevenlabs_api_key: str = ""  # TTS
+    lmnt_api_key: str = ""  # TTS
+    hume_api_key: str = ""  # TTS (Hume Octave)
 
     # --- Model defaults (override via env) ---
     # Stage A — storyboard chat via `genblaze_openai.chat()`. gpt-4.1-nano

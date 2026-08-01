@@ -96,7 +96,10 @@ class ProviderDecision(Record, Base):
 class PaymentRecord(Record, Base):
     __tablename__ = "payment_records"
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
-    mandate_id: Mapped[str] = mapped_column(ForeignKey("mandates.id"), index=True)
+    mandate_id: Mapped[str | None] = mapped_column(ForeignKey("mandates.id"), index=True)
+    commercial_order_id: Mapped[str | None] = mapped_column(
+        ForeignKey("commercial_orders.id"), unique=True, index=True
+    )
     run_id: Mapped[str | None] = mapped_column(String(36), index=True)
     gateway: Mapped[str] = mapped_column(String(30))
     environment: Mapped[str] = mapped_column(String(20))
@@ -110,6 +113,8 @@ class PaymentRecord(Record, Base):
     payment_state: Mapped[str] = mapped_column(String(40), index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     redress_state: Mapped[str] = mapped_column(String(40), default="NONE")
+    direction: Mapped[str] = mapped_column(String(40), default="PROVIDER_PROCUREMENT")
+    paid_amount_minor: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class PaymentEvent(Record, Base):

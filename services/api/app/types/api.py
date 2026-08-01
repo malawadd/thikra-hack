@@ -24,6 +24,7 @@ class Selection(BaseModel):
     tts: ProviderChoice = ProviderChoice(vendor="openai")
     music: ProviderChoice = ProviderChoice(vendor="replicate")
 
+
 # Seed-prompt bounds, shared by both request DTOs so the storyboard endpoint
 # and the media stream (which re-sends the same seed) accept identical input.
 # 2000 chars leaves room for a detailed, art-directed brief — the earlier 500
