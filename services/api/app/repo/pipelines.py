@@ -32,6 +32,7 @@ from genblaze_openai import chat
 from genblaze_s3 import S3StorageBackend
 
 from app.config import settings
+from app.repo.genblaze_windows_compat import install_windows_file_uri_compat
 from app.repo.provider_catalog import CatalogEntry
 from app.types.mandate import MandateProposal
 from app.types.storyboard import StoryboardSpec
@@ -40,6 +41,8 @@ PIPELINE_NAME = "genblaze-gen-media-multi-provider-sample"
 PREFIX = "explainers"
 
 logger = logging.getLogger("api.pipelines")
+
+install_windows_file_uri_compat()
 
 
 # --- Backend + sink singletons ----------------------------------------------
@@ -129,9 +132,9 @@ def compile_mandate_proposal(brief: dict) -> MandateProposal:
 
 _STORYBOARD_INSTRUCTION = (
     "You are a storyboard writer for a short narrated explainer video. "
-    "Given the seed below, produce a JSON storyboard with exactly 3 scenes. Each "
-    "scene's `duration_sec` MUST be exactly 5 or 10 (the video model only "
-    "renders 5s or 10s clips); aim for a 15-30 second total. First pick a "
+    "Given the seed below, produce a JSON storyboard with exactly {scene_count} scenes. Each "
+    "scene's `duration_sec` MUST be exactly {scene_duration} seconds; the total "
+    "duration must be {total_duration} seconds. First pick a "
     "`style_prompt`: "
     "ONE sentence locking the visual look every scene must share "
     '(palette + illustration style + lighting + mood, e.g. "Soft pastel '
@@ -145,7 +148,13 @@ _STORYBOARD_INSTRUCTION = (
 )
 
 
-def generate_storyboard(prompt: str, model: str | None = None) -> tuple[StoryboardSpec, str]:
+def generate_storyboard(
+    prompt: str,
+    model: str | None = None,
+    *,
+    scene_count: int = 3,
+    scene_duration: int = 5,
+) -> tuple[StoryboardSpec, str]:
     """Stage A — one-shot OpenAI chat call via `genblaze_openai.chat()`.
 
     `chat()` is a standalone function (not a `BaseProvider`), so it can't
@@ -173,7 +182,12 @@ def generate_storyboard(prompt: str, model: str | None = None) -> tuple[Storyboa
     try:
         response = chat(
             model,
-            prompt=_STORYBOARD_INSTRUCTION.format(seed=prompt),
+            prompt=_STORYBOARD_INSTRUCTION.format(
+                seed=prompt,
+                scene_count=scene_count,
+                scene_duration=scene_duration,
+                total_duration=scene_count * scene_duration,
+            ),
             api_key=settings.openai_api_key,
             response_format=StoryboardSpec,
         )
@@ -347,8 +361,8 @@ def build_media_pipeline(
     video_model: str,
     tts_entry: CatalogEntry,
     tts_model: str,
-    music_entry: CatalogEntry,
-    music_model: str,
+    music_entry: CatalogEntry | None = None,
+    music_model: str | None = None,
 ) -> Pipeline:
     """Stage B2 — per-scene video + TTS, then one trailing music step.
 
@@ -376,7 +390,7 @@ def build_media_pipeline(
             "video_model": video_model,
             "tts_provider": tts_entry.vendor,
             "tts_model": tts_model,
-            "music_provider": music_entry.vendor,
+            "music_provider": music_entry.vendor if music_entry else None,
             "music_model": music_model,
             "image_handoff": video_entry.image_handoff,
             "parent_run_id": getattr(keyframe_result.run, "run_id", None),
@@ -384,7 +398,7 @@ def build_media_pipeline(
     )
     vid = video_entry.make()
     tts = tts_entry.make()
-    music = music_entry.make()
+    music = music_entry.make() if music_entry else None
 
     p = _attach(Pipeline(PIPELINE_NAME, max_concurrency=3, preflight=False)).from_result(
         keyframe_result
@@ -424,6 +438,8 @@ def build_media_pipeline(
             video_kwargs["image"] = image_ref
         p = p.step(vid, **video_kwargs)
         p = p.step(tts, model=tts_model, modality=Modality.AUDIO, prompt=scene.narration)
+    if music is None or music_model is None:
+        return p
     logger.info(
         "B2 music queued",
         extra={
@@ -434,10 +450,4 @@ def build_media_pipeline(
             "duration_sec": spec.total_duration_sec,
         },
     )
-    return p.step(
-        music,
-        model=music_model,
-        modality=Modality.AUDIO,
-        prompt=spec.music_prompt,
-        duration=spec.total_duration_sec,
-    )
+    return p.step(music, model=music_model, modality=Modality.AUDIO, prompt=spec.music_prompt, duration=spec.total_duration_sec)

@@ -4,6 +4,9 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "setup:api": "node scripts/setup-api.mjs",
+    "codex:connect": "node scripts/codex-thikra-mcp.mjs connect",
+    "codex:update": "node scripts/codex-thikra-mcp.mjs update",
+    "codex:disconnect": "node scripts/codex-thikra-mcp.mjs disconnect",
     "dev": "concurrently --names web,api --prefix-colors blue,green \"pnpm dev:web\" \"pnpm dev:api\"",
     "dev:web": "pnpm --filter @thikra/web dev",
     "dev:api": "node scripts/run-api.mjs",

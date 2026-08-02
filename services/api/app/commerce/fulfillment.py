@@ -92,7 +92,7 @@ def _brief_for_order(order: CommercialOrder, offer: ServiceOffer) -> BriefCreate
                 int(value.get("maximumRetries", offer.maximum_retries_included)),
                 offer.maximum_retries_included,
             ),
-            "permitted_providers": [],
+            "permitted_providers": value.get("requiredProviders", []),
             "forbidden_providers": value.get("forbiddenProviders", []),
             "human_approval_threshold_minor": order.quoted_total_minor,
             "commercial_use_required": True,
@@ -108,15 +108,35 @@ def _brief_for_order(order: CommercialOrder, offer: ServiceOffer) -> BriefCreate
     )
 
 
-def _required_provider_selections(order: CommercialOrder) -> dict:
-    required = set(_load(order.input_payload_json, {}).get("requiredProviders", []))
-    if not required:
-        return {}
+def _order_provider_selections(order: CommercialOrder) -> dict:
+    input_payload = _load(order.input_payload_json, {})
+    explicit = input_payload.get("providerSelection", {})
+    if explicit:
+        selections = {}
+        for slot, choice in explicit.items():
+            entry = provider_catalog.resolve(slot, choice["vendor"])
+            selections[slot] = {"vendor": entry.vendor, "model": choice.get("model") or entry.default_model}
+        return selections
+    required = set(input_payload.get("requiredProviders", []))
+    forbidden = set(input_payload.get("forbiddenProviders", []))
     selections = {}
     for slot, entries in provider_catalog.matrix().items():
         match = next((entry for entry in entries if entry["vendor"] in required), None)
         if match:
             selections[slot] = {"vendor": match["vendor"], "model": match["default_model"]}
+    # Commerce defaults to GMI Cloud for image-to-video unless the buyer set a
+    # provider allow-list or explicitly forbade it. Studio's default must not
+    # silently diverge from the order path.
+    if not required and "gmicloud" not in forbidden:
+        gmi_video = next(
+            (entry for entry in provider_catalog.matrix()["video"] if entry["vendor"] == "gmicloud"),
+            None,
+        )
+        if gmi_video:
+            selections["video"] = {
+                "vendor": gmi_video["vendor"],
+                "model": gmi_video["default_model"],
+            }
     return selections
 
 
@@ -126,10 +146,18 @@ def start_order(db: Session, auth: AuthContext, order: CommercialOrder) -> Fulfi
     existing = db.scalar(select(FulfillmentJob).where(FulfillmentJob.order_id == order.id))
     if existing:
         return existing
-    if order.status != "PAID":
-        raise ValueError("Fulfillment can start only after payment is complete")
     payment = db.scalar(select(PaymentRecord).where(PaymentRecord.commercial_order_id == order.id))
-    if payment is None or payment.paid_amount_minor != order.quoted_total_minor:
+    test_bypass = bool(
+        payment
+        and payment.gateway == "TEST_BYPASS"
+        and payment.payment_state == "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
+    )
+    if order.status != "PAID":
+        if order.status != "TEST_AUTHORIZED" or not test_bypass:
+            raise ValueError(
+                "Fulfillment can start only after payment is complete or local test authorization"
+            )
+    elif payment is None or payment.paid_amount_minor != order.quoted_total_minor:
         raise ValueError("Order does not have an exact completed payment")
     offer = db.get(ServiceOffer, order.service_offer_id)
     transition_order(db, order, "ACCEPTED", actor_type="SYSTEM", actor_id="order-service")
@@ -143,8 +171,13 @@ def start_order(db: Session, auth: AuthContext, order: CommercialOrder) -> Fulfi
     compiled = compile_brief(db, _brief_for_order(order, offer))
     confirm_mandate(db, compiled["mandate_id"])
     payment.mandate_id = compiled["mandate_id"]
-    selections = _required_provider_selections(order)
-    strategy = provider_strategy(db, compiled["mandate_id"], selections or None)
+    selections = _order_provider_selections(order)
+    strategy = provider_strategy(
+        db,
+        compiled["mandate_id"],
+        selections or None,
+        slots=set(selections) if selections else None,
+    )
     run = launch_run(
         db,
         compiled["mandate_id"],
@@ -217,6 +250,12 @@ async def execute_live_fulfillment(order_id: str) -> None:
         if job is None or not job.generation_run_id:
             return
         run_id = job.generation_run_id
+        run = db.get(GenerationRun, run_id)
+        # A job is claimed exactly once.  This is vital for MCP callers: an
+        # interrupted client must not cause a second provider submission for
+        # the same paid or test-authorized order.
+        if job.status != "FULFILLING" or run is None or run.status != "GENERATING":
+            return
     await execute_generation_run(run_id)
     with SessionLocal() as db:
         order = db.get(CommercialOrder, order_id)
@@ -231,10 +270,68 @@ async def execute_live_fulfillment(order_id: str) -> None:
                 actor_id="verification-engine",
                 payload={"generation_run_id": run.id},
             )
-            transition_order(
-                db, order, "REVIEW_REQUIRED", actor_type="AGENT", actor_id="verification-engine"
+            payment = db.get(PaymentRecord, run.payment_record_id)
+            checks = list(
+                db.scalars(
+                    select(EvaluationResult)
+                    .join(Evaluation, EvaluationResult.evaluation_id == Evaluation.id)
+                    .where(Evaluation.run_id == run.id)
+                )
             )
-            job.status = "REVIEW_REQUIRED"
+            test_bypass = bool(
+                payment
+                and payment.gateway == "TEST_BYPASS"
+                and payment.payment_state == "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
+            )
+            if test_bypass and not any(check.status == "FAIL" for check in checks):
+                # The explicit local test action is also the user's approval to complete
+                # a no-failure Sandbox run. Paid orders always retain human review.
+                run.status = "COMPLETED"
+                run.current_stage = "Verified local Sandbox test delivery"
+                run.accepted = True
+                for asset in db.scalars(select(DBAsset).where(DBAsset.run_id == run.id)):
+                    asset.approval_state = "APPROVED"
+                append_event(
+                    db,
+                    workspace_id=run.workspace_id,
+                    run_id=run.id,
+                    event_type="delivery.test_auto_approved",
+                    actor_type="SYSTEM",
+                    actor_id="local-sandbox-test-fulfillment",
+                    payload={
+                        "customer_payment_collected": False,
+                        "verification_failures": 0,
+                    },
+                    related_object_ids=[order.id, job.id, run.id, payment.id],
+                )
+                transition_order(
+                    db,
+                    order,
+                    "READY",
+                    actor_type="AGENT",
+                    actor_id="verification-engine",
+                    payload={"local_sandbox_test_auto_delivery": True},
+                )
+                _create_delivery_package(db, order, job, run)
+                job.status = "COMPLETED"
+                job.completed_at = datetime.now(UTC)
+                transition_order(
+                    db,
+                    order,
+                    "DELIVERED",
+                    actor_type="SYSTEM",
+                    actor_id="delivery-service",
+                    payload={
+                        "fulfillment_job_id": job.id,
+                        "generation_run_id": run.id,
+                        "local_sandbox_test_auto_delivery": True,
+                    },
+                )
+            else:
+                transition_order(
+                    db, order, "REVIEW_REQUIRED", actor_type="AGENT", actor_id="verification-engine"
+                )
+                job.status = "REVIEW_REQUIRED"
         elif run.status == "FAILED":
             transition_order(
                 db,
@@ -454,6 +551,11 @@ def _create_delivery_package(
         "service_version": order.service_version,
         "quote_id": order.quote_id,
         "payment_reference": payment.external_order_id or payment.id,
+        "payment_status": (
+            "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
+            if payment.gateway == "TEST_BYPASS"
+            else payment.payment_state
+        ),
         "payment_amount_minor": payment.paid_amount_minor,
         "currency": order.currency,
         "mandate_id": job.mandate_id,

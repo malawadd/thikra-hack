@@ -7,12 +7,16 @@ imports database models or repositories directly.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
 
 from app.commerce.fulfillment import (
+    execute_live_fulfillment,
     retry_order,
     serialize_deliverables,
     serialize_receipt,
@@ -20,6 +24,7 @@ from app.commerce.fulfillment import (
 )
 from app.commerce.models import CommercialOrder, DeliveryReceipt, Dispute, OrderEvent, Quote
 from app.commerce.payments import (
+    authorize_test_fulfillment,
     create_payment_authorization,
     reconcile_authorization,
     serialize_commerce_payment,
@@ -42,6 +47,35 @@ from app.commerce.service import (
     serialize_service,
 )
 from app.thikra.database import SessionLocal
+
+logger = logging.getLogger("app.agents.gateway")
+
+_live_fulfillment_threads: set[threading.Thread] = set()
+
+
+def _run_live_fulfillment(order_id: str) -> None:
+    """Run provider work outside the MCP request cancellation scope."""
+    try:
+        asyncio.run(execute_live_fulfillment(order_id))
+    except Exception:
+        logger.exception("live test fulfillment worker crashed", extra={"order_id": order_id})
+
+
+def _schedule_live_fulfillment(order_id: str) -> None:
+    """Return the MCP result immediately; provider work can take minutes."""
+    worker = threading.Thread(
+        target=_run_live_fulfillment,
+        args=(order_id,),
+        name=f"thikra-fulfillment-{order_id[:8]}",
+        daemon=True,
+    )
+    _live_fulfillment_threads.add(worker)
+    worker.start()
+
+    def discard() -> None:
+        _live_fulfillment_threads.discard(worker)
+
+    threading.Thread(target=lambda: (worker.join(), discard()), daemon=True).start()
 
 
 @dataclass(frozen=True)
@@ -211,6 +245,27 @@ def start_paid_order(identity: GatewayIdentity, order_id: str) -> dict[str, Any]
             raise LookupError("Order not found")
         start_order(db, identity.auth(), order)
         return serialize_order(db, order, detail=True)
+
+
+async def start_test_fulfillment(identity: GatewayIdentity, order_id: str) -> dict[str, Any]:
+    """Launch local SANDBOX generation after a documented non-payment bypass."""
+    with SessionLocal() as db:
+        order = db.get(CommercialOrder, order_id)
+        if order is None:
+            raise LookupError("Order not found")
+        payment = authorize_test_fulfillment(db, identity.auth(), order)
+        job = start_order(db, identity.auth(), order)
+        response = {
+            "payment": serialize_commerce_payment(payment, order),
+            "order": serialize_order(db, order, detail=True),
+            "test_fulfillment": {
+                "customer_payment_collected": False,
+                "provider_spend_may_occur": True,
+                "fulfillment_job_id": job.id,
+            },
+        }
+    _schedule_live_fulfillment(order_id)
+    return response
 
 
 def order_status(identity: GatewayIdentity, order_id: str) -> dict[str, Any]:

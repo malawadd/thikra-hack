@@ -7,6 +7,19 @@ COMMON_BRIEF_PROPERTIES = {
     "language": {"type": "string", "default": "ar"},
     "requiredProviders": {"type": "array", "items": {"type": "string"}, "default": []},
     "forbiddenProviders": {"type": "array", "items": {"type": "string"}, "default": []},
+    "providerSelection": {
+        "type": "object",
+        "default": {},
+        "additionalProperties": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["vendor"],
+            "properties": {
+                "vendor": {"type": "string"},
+                "model": {"type": "string"},
+            },
+        },
+    },
     "requiredElements": {"type": "array", "items": {"type": "string"}, "default": []},
     "forbiddenElements": {"type": "array", "items": {"type": "string"}, "default": []},
     "claimConstraints": {"type": "array", "items": {"type": "string"}, "default": []},
@@ -71,6 +84,25 @@ def output_schema(media: list[tuple[str, str]]) -> dict:
 
 
 SERVICE_DEFINITIONS = [
+    {
+        "slug": "sandbox-video-smoke-test",
+        "name": "Sandbox 5-Second Video Smoke Test",
+        "short_description": "The smallest real 4-second video path for local agent testing.",
+        "long_description": "Generate one 4-second vertical product clip, verify it, preserve B2 evidence, and issue a test-labelled receipt. Available only from a local Sandbox API.",
+        "category": "VIDEO",
+        "modalities": ["image", "video"],
+        "input_schema": input_schema(modalities=["image", "video"], duration=4),
+        "output_schema": output_schema([("video", "video/mp4")]),
+        # The development estimate remains below the local USD 5 test cap.
+        "base_price_minor": 1,
+        "minimum_price_minor": 1,
+        "maximum_price_minor": 500,
+        "delivery_min": 60,
+        "delivery_max": 300,
+        "maximum_retries": 0,
+        "verification": ["duration", "resolution", "aspect ratio", "prohibited elements"],
+        "sandbox_only": True,
+    },
     {
         "slug": "arabic-product-image",
         "name": "Arabic Product Image",

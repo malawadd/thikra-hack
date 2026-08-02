@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
@@ -12,8 +13,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.commerce import api as commerce_api
 from app.commerce.api import router
-from app.commerce.models import APIKey, CommercialOrder, Quote, ServiceOffer
+from app.commerce.models import APIKey, CommercialOrder, FulfillmentJob, Quote, ServiceOffer
 from app.commerce.pricing import quote_breakdown
 from app.commerce.rate_limit import SlidingWindowRateLimiter
 from app.commerce.receipts import sign_receipt, verify_receipt
@@ -27,6 +29,7 @@ from app.commerce.webhooks import (
 )
 from app.config import settings
 from app.thikra.database import Base, get_db
+from app.thikra.models import GenerationRun
 from app.thikra.service import seed_database
 
 DEMO_KEY = "thikra_test_demo_local_only"
@@ -56,6 +59,22 @@ def commerce_client(commerce_db: Session):
 
 def _headers(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {DEMO_KEY}", "Idempotency-Key": key}
+
+
+def test_sandbox_seed_upgrades_only_legacy_demo_key_for_test_fulfillment(
+    commerce_db: Session, monkeypatch: pytest.MonkeyPatch
+):
+    legacy_key = commerce_db.scalar(select(APIKey))
+    assert legacy_key is not None
+    legacy_key.scopes_json = json.dumps(["orders:create"])
+    commerce_db.commit()
+    monkeypatch.setattr(settings, "app_mode", "SANDBOX")
+    monkeypatch.setattr(settings, "thikra_agent_test_fulfillment_enabled", True)
+
+    seed_commerce(commerce_db)
+
+    assert "orders:test" in json.loads(legacy_key.scopes_json)
+    authenticate_api_key(commerce_db, DEMO_KEY, "orders:test")
 
 
 def _quote_payload() -> dict:
@@ -199,7 +218,7 @@ def test_quote_expiration_and_invalid_order_transition(
         )
 
 
-def test_complete_external_agent_rest_flow(commerce_client: TestClient):
+def test_complete_external_agent_rest_flow(commerce_client: TestClient, commerce_db: Session):
     services = commerce_client.get("/api/v1/services")
     assert services.status_code == 200
     assert services.json()["total"] == 6
@@ -253,6 +272,9 @@ def test_complete_external_agent_rest_flow(commerce_client: TestClient):
     )
     assert started.status_code == 200, started.text
     assert started.json()["status"] == "REVIEW_REQUIRED"
+    job = commerce_db.scalar(select(FulfillmentJob).where(FulfillmentJob.order_id == order_id))
+    run = commerce_db.get(GenerationRun, job.generation_run_id)
+    assert json.loads(run.provider_selection_json)["video"]["vendor"] == "gmicloud"
 
     retried = commerce_client.post(
         f"/api/v1/orders/{order_id}/retry",
@@ -306,6 +328,143 @@ def test_complete_external_agent_rest_flow(commerce_client: TestClient):
     )
     assert dispute.status_code == 201, dispute.text
     assert dispute.json()["status"] == "OPEN"
+
+
+def test_commerce_provider_constraints_normalize_and_are_enforced(
+    commerce_client: TestClient, commerce_db: Session
+):
+    payload = _quote_payload()
+    payload["input"] |= {
+        "requiredProviders": ["OpenAI", "GMI Cloud"],
+        "forbiddenProviders": ["Replicate", "Prava"],
+    }
+    quote_response = commerce_client.post(
+        "/api/v1/quotes", json=payload, headers=_headers("provider-constraint-quote")
+    )
+    assert quote_response.status_code == 201, quote_response.text
+    quote = commerce_db.get(Quote, quote_response.json()["id"])
+    stored_input = json.loads(quote.input_payload_json)
+    assert stored_input["requiredProviders"] == ["gmicloud", "openai"]
+    assert stored_input["forbiddenProviders"] == ["prava", "replicate"]
+
+    commerce_client.post(
+        f"/api/v1/quotes/{quote.id}/accept", headers=_headers("provider-constraint-accept")
+    )
+    order = commerce_client.post(
+        "/api/v1/orders",
+        json={"quote_id": quote.id},
+        headers=_headers("provider-constraint-order"),
+    ).json()
+    authorized = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/payment-authorization",
+        json={"user_id": "provider-policy", "user_email": "provider-policy@nouraglow.sa"},
+        headers=_headers("provider-constraint-auth"),
+    )
+    assert authorized.status_code == 201, authorized.text
+    paid = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/payment/confirm-demo",
+        json={"approved_by": "provider-policy", "acknowledge_simulation": True},
+        headers=_headers("provider-constraint-confirm"),
+    )
+    assert paid.status_code == 200, paid.text
+    started = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/start", headers=_headers("provider-constraint-start")
+    )
+    assert started.status_code == 200, started.text
+    job = commerce_db.scalar(select(FulfillmentJob).where(FulfillmentJob.order_id == order["id"]))
+    run = commerce_db.get(GenerationRun, job.generation_run_id)
+    selected = json.loads(run.provider_selection_json)
+    assert {choice["vendor"] for choice in selected.values()} <= {"openai", "gmicloud"}
+    assert selected["video"]["vendor"] == "gmicloud"
+    assert "replicate" not in {choice["vendor"] for choice in selected.values()}
+
+
+def test_local_sandbox_test_fulfillment_starts_live_executor(
+    commerce_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(settings, "app_mode", "SANDBOX")
+    monkeypatch.setattr(settings, "thikra_api_base_url", "http://127.0.0.1:43192")
+    monkeypatch.setattr(settings, "thikra_agent_test_fulfillment_enabled", True)
+    monkeypatch.setattr(settings, "thikra_agent_test_max_quote_minor", 1000)
+    started: list[str] = []
+
+    async def fake_executor(order_id: str) -> None:
+        started.append(order_id)
+
+    monkeypatch.setattr(commerce_api, "execute_live_fulfillment", fake_executor)
+    quote = commerce_client.post(
+        "/api/v1/quotes", json=_quote_payload(), headers=_headers("test-fulfillment-quote")
+    ).json()
+    commerce_client.post(
+        f"/api/v1/quotes/{quote['id']}/accept", headers=_headers("test-fulfillment-accept")
+    )
+    order = commerce_client.post(
+        "/api/v1/orders",
+        json={"quote_id": quote["id"], "external_reference": "local-test-fulfillment"},
+        headers=_headers("test-fulfillment-order"),
+    ).json()
+
+    response = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/test-fulfillment",
+        headers=_headers("test-fulfillment-start"),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["payment"]["gateway"] == "TEST_BYPASS"
+    assert body["payment"]["payment_state"] == "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
+    assert body["payment"]["paid_amount_minor"] == 0
+    assert body["order"]["status"] == "FULFILLING"
+    assert started == [order["id"]]
+
+
+def test_test_fulfillment_enforces_local_sandbox_scope_and_cap(
+    commerce_client: TestClient, commerce_db: Session, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(settings, "app_mode", "SANDBOX")
+    monkeypatch.setattr(settings, "thikra_api_base_url", "http://localhost:43192")
+    monkeypatch.setattr(settings, "thikra_agent_test_fulfillment_enabled", False)
+    quote = commerce_client.post(
+        "/api/v1/quotes", json=_quote_payload(), headers=_headers("test-guard-quote")
+    ).json()
+    commerce_client.post(f"/api/v1/quotes/{quote['id']}/accept", headers=_headers("test-guard-accept"))
+    order = commerce_client.post(
+        "/api/v1/orders", json={"quote_id": quote["id"]}, headers=_headers("test-guard-order")
+    ).json()
+    disabled = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/test-fulfillment", headers=_headers("test-guard-disabled")
+    )
+    assert disabled.status_code == 409
+
+    monkeypatch.setattr(settings, "thikra_agent_test_fulfillment_enabled", True)
+    key = commerce_db.scalar(select(APIKey))
+    key.scopes_json = '["orders:create"]'
+    commerce_db.commit()
+    forbidden = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/test-fulfillment", headers=_headers("test-guard-scope")
+    )
+    assert forbidden.status_code == 403
+
+    key.scopes_json = '["orders:create", "orders:test"]'
+    commerce_db.commit()
+    monkeypatch.setattr(settings, "thikra_agent_test_max_quote_minor", 1)
+    over_cap = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/test-fulfillment", headers=_headers("test-guard-cap")
+    )
+    assert over_cap.status_code == 409
+
+    monkeypatch.setattr(settings, "thikra_agent_test_max_quote_minor", 1000)
+    monkeypatch.setattr(settings, "thikra_api_base_url", "https://sandbox.thikra.example")
+    non_local = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/test-fulfillment", headers=_headers("test-guard-host")
+    )
+    assert non_local.status_code == 409
+
+    monkeypatch.setattr(settings, "thikra_api_base_url", "http://localhost:43192")
+    monkeypatch.setattr(settings, "app_mode", "PRODUCTION")
+    non_sandbox = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/test-fulfillment", headers=_headers("test-guard-mode")
+    )
+    assert non_sandbox.status_code == 409
 
 
 def test_idempotency_conflict_is_rejected(commerce_client: TestClient):

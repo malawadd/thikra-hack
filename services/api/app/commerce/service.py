@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from hmac import compare_digest
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -38,6 +39,7 @@ from app.commerce.webhooks import (
     webhook_secret_hash,
 )
 from app.config import settings
+from app.repo import provider_catalog
 from app.thikra.audit import append_event, canonical_json
 from app.thikra.models import PaymentRecord, RedressCase
 from app.thikra.service import workspace
@@ -45,6 +47,40 @@ from app.thikra.service import workspace
 
 def _load(value: str | None, fallback: Any = None) -> Any:
     return json.loads(value) if value else fallback
+
+
+def _provider_id(value: str, *, field: str) -> str:
+    """Convert a buyer-facing provider label into the catalog's vendor identifier."""
+    normalized = "".join(character for character in value.casefold() if character.isalnum())
+    catalog_vendors = {
+        "".join(character for character in entry["vendor"] if character.isalnum()): entry["vendor"]
+        for entries in provider_catalog.matrix().values()
+        for entry in entries
+    }
+    if normalized in catalog_vendors:
+        return catalog_vendors[normalized]
+    # Prava is a payment gateway rather than a Genblaze media provider. Retain
+    # it as an explicit commercial constraint, but never route media through it.
+    if normalized == "prava" and field == "forbiddenProviders":
+        return "prava"
+    raise ValueError(f"Unknown provider '{value}' in {field}")
+
+
+def _normalize_provider_constraints(input_payload: dict[str, Any]) -> tuple[dict[str, Any], set[str], set[str]]:
+    normalized = dict(input_payload)
+    required = {
+        _provider_id(value, field="requiredProviders")
+        for value in input_payload.get("requiredProviders", [])
+    }
+    forbidden = {
+        _provider_id(value, field="forbiddenProviders")
+        for value in input_payload.get("forbiddenProviders", [])
+    }
+    if required & forbidden:
+        raise ValueError("A provider cannot be both required and forbidden")
+    normalized["requiredProviders"] = sorted(required)
+    normalized["forbiddenProviders"] = sorted(forbidden)
+    return normalized, required, forbidden
 
 
 def _aware(value: datetime) -> datetime:
@@ -265,22 +301,19 @@ async def create_quote(db: Session, auth: AuthContext, request: QuoteCreate) -> 
     if errors:
         path = ".".join(str(part) for part in errors[0].path) or "$"
         raise ValueError(f"Input schema validation failed at {path}: {errors[0].message}")
-    required = set(request.input.get("requiredProviders", []))
-    forbidden = set(request.input.get("forbiddenProviders", []))
-    if required & forbidden:
-        raise ValueError("A provider cannot be both required and forbidden")
+    input_payload, required, forbidden = _normalize_provider_constraints(request.input)
     principal = _principal(db, request.buyer_principal)
     agent = _agent(db, auth, principal, request.buyer_agent)
     adapter = StaticDevelopmentPricingAdapter()
     estimates = []
     for modality in _load(offer.supported_modalities_json, []):
         provider_id = sorted(required)[0] if required else "catalog-default"
-        estimates.append(await adapter.estimate(provider_id, "default", modality, request.input))
+        estimates.append(await adapter.estimate(provider_id, "default", modality, input_payload))
     provider_estimate = max(offer.base_price_minor, sum(item.amount_minor for item in estimates))
     breakdown = quote_breakdown(
         provider_estimate,
         min(
-            int(request.input.get("maximumRetries", offer.maximum_retries_included)),
+            int(input_payload.get("maximumRetries", offer.maximum_retries_included)),
             offer.maximum_retries_included,
         ),
     )
@@ -316,17 +349,17 @@ async def create_quote(db: Session, auth: AuthContext, request: QuoteCreate) -> 
                 "sources": [item.source for item in estimates],
             }
         ),
-        input_payload_json=canonical_json(request.input),
+        input_payload_json=canonical_json(input_payload),
         mandate_preview_json=canonical_json(
             {
                 "service": offer.slug,
                 "service_version": offer.version,
-                "objective": request.input.get("brief"),
+                "objective": input_payload.get("brief"),
                 "allowed_modalities": _load(offer.supported_modalities_json, []),
                 "required_providers": sorted(required),
                 "forbidden_providers": sorted(forbidden),
                 "maximum_retries": min(
-                    int(request.input.get("maximumRetries", offer.maximum_retries_included)),
+                    int(input_payload.get("maximumRetries", offer.maximum_retries_included)),
                     offer.maximum_retries_included,
                 ),
                 "verification_required": True,
@@ -822,9 +855,16 @@ def serialize_dispute(dispute: Dispute) -> dict:
 
 def seed_commerce(db: Session) -> None:
     ws = workspace(db)
-    if not db.scalar(select(ServiceOffer).limit(1)):
-        now = datetime.now(UTC)
-        for definition in SERVICE_DEFINITIONS:
+    now = datetime.now(UTC)
+    for definition in SERVICE_DEFINITIONS:
+        if definition.get("sandbox_only") and settings.app_mode.upper() != "SANDBOX":
+            continue
+        existing = db.scalar(
+            select(ServiceOffer).where(
+                ServiceOffer.slug == definition["slug"], ServiceOffer.version == 1
+            )
+        )
+        if existing is None:
             offer = ServiceOffer(
                 slug=definition["slug"],
                 version=1,
@@ -870,6 +910,20 @@ def seed_commerce(db: Session) -> None:
                 payload={"slug": offer.slug, "version": 1},
                 related_object_ids=[offer.id],
             )
+        elif definition.get("sandbox_only"):
+            # Sandbox-only definitions are intentionally mutable local test
+            # fixtures; keep an existing developer database aligned with the
+            # shortest supported live smoke path.
+            existing.name = definition["name"]
+            existing.short_description = definition["short_description"]
+            existing.long_description = definition["long_description"]
+            existing.input_schema_json = canonical_json(definition["input_schema"])
+            existing.output_schema_json = canonical_json(definition["output_schema"])
+            existing.minimum_price_minor = definition["minimum_price_minor"]
+            existing.maximum_price_minor = definition["maximum_price_minor"]
+            existing.estimated_delivery_seconds_min = definition["delivery_min"]
+            existing.estimated_delivery_seconds_max = definition["delivery_max"]
+            existing.maximum_retries_included = definition["maximum_retries"]
     if not db.scalar(select(DeveloperApplication).limit(1)):
         owner = BuyerPrincipal(
             type="HUMAN",
@@ -902,6 +956,7 @@ def seed_commerce(db: Session) -> None:
                         "services:read",
                         "quotes:create",
                         "orders:create",
+                        "orders:test",
                         "orders:read",
                         "payments:create",
                         "deliverables:read",
@@ -927,4 +982,24 @@ def seed_commerce(db: Session) -> None:
             },
             related_object_ids=[application.id],
         )
+    elif settings.app_mode.upper() == "SANDBOX" and settings.thikra_agent_test_fulfillment_enabled:
+        # Earlier local databases predate `orders:test`. Upgrade only the
+        # configured local demo credential; production and customer-issued keys
+        # are never widened by a seed operation.
+        demo_secret = settings.thikra_demo_api_key
+        demo_key = db.scalar(select(APIKey).where(APIKey.prefix == demo_secret[:20]))
+        if demo_key and compare_digest(demo_key.hashed_secret, hash_secret(demo_secret)):
+            scopes = set(_load(demo_key.scopes_json, []))
+            if "orders:test" not in scopes:
+                demo_key.scopes_json = canonical_json(sorted(scopes | {"orders:test"}))
+                append_event(
+                    db,
+                    workspace_id=ws.id,
+                    run_id=None,
+                    event_type="api_key.scope_granted",
+                    actor_type="SYSTEM",
+                    actor_id="commerce-seed",
+                    payload={"prefix": demo_key.prefix, "scope": "orders:test", "local_sandbox": True},
+                    related_object_ids=[demo_key.id],
+                )
     db.commit()

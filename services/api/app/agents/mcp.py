@@ -53,7 +53,8 @@ mcp_server = MCPServer(
     instructions=(
         "Use the service catalog and deterministic quote before creating an order. "
         "Payment authorization always requires a human; generation is not delivery, "
-        "and delivery is not buyer acceptance."
+        "and delivery is not buyer acceptance. Use test fulfillment only when the user "
+        "explicitly requests a local Sandbox test: it creates real provider spend but no customer payment."
     ),
     version="1.0.0",
     token_verifier=ThikraTokenVerifier(),
@@ -147,6 +148,12 @@ async def thikra_get_payment_status(order_id: str) -> dict[str, Any]:
 def thikra_start_order(order_id: str) -> dict[str, Any]:
     """Idempotently start fulfillment only after exact payment completion."""
     return gateway.start_paid_order(_identity(), order_id)
+
+
+@mcp_server.tool(name="thikra_start_test_fulfillment")
+async def thikra_start_test_fulfillment(order_id: str) -> dict[str, Any]:
+    """Start local Sandbox generation without Prava; real provider spend may occur and no customer payment is collected."""
+    return await gateway.start_test_fulfillment(_identity(), order_id)
 
 
 @mcp_server.tool(name="thikra_get_order_status")

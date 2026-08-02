@@ -27,6 +27,7 @@ what disambiguates them.
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from genblaze_core import Modality
 from genblaze_core.providers.base import BaseProvider
@@ -45,6 +46,7 @@ from genblaze_replicate import ReplicateProvider
 from genblaze_runway import RunwayProvider
 
 from app.config import settings
+from app.repo.openai_sora_compat import fetch_sora_output, submit_sora
 
 # Slot identifiers — the 5 switchboard roles. `chat` is special (driven by the
 # standalone `genblaze_openai.chat()` function, not a Pipeline step), so its
@@ -54,6 +56,16 @@ CHAT, IMAGE, VIDEO, TTS, MUSIC = "chat", "image", "video", "tts", "music"
 # GMICloud Kling i2v renders 5s OR 10s clips only — any other `duration` 400s.
 KLING_GRID = (5.0, 10.0)
 
+# Portable SDK transfer root; avoids the Genblaze Windows file-URI parser bug.
+OPENAI_IMAGE_TRANSFER_ROOT = Path("/tmp")
+class _ThikraSoraProvider(SoraProvider):
+    """Bridge Genblaze 0.3.x to the current OpenAI Videos API parameter name."""
+
+    def submit(self, step, config=None):
+        return submit_sora(self, step)
+
+    def fetch_output(self, prediction_id, step):
+        return fetch_sora_output(self, prediction_id, step)
 
 def _instrumental_music_registry() -> ModelRegistry:
     """Audio registry override making GMICloud MiniMax-Music an INSTRUMENTAL bed.
@@ -152,7 +164,10 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="gpt-image-1-mini",
             suggested_models=("gpt-image-1-mini", "gpt-image-1", "dall-e-3"),
             modality=Modality.IMAGE,
-            make=lambda: DalleProvider(api_key=settings.openai_api_key),
+            make=lambda: DalleProvider(
+                api_key=settings.openai_api_key,
+                output_dir=OPENAI_IMAGE_TRANSFER_ROOT,
+            ),
         ),
         "nvidia": CatalogEntry(
             slot=IMAGE,
@@ -221,7 +236,10 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="sora-2",
             suggested_models=("sora-2", "sora-2-pro"),
             modality=Modality.VIDEO,
-            make=lambda: SoraProvider(api_key=settings.openai_api_key),
+            make=lambda: _ThikraSoraProvider(
+                api_key=settings.openai_api_key,
+                output_dir=OPENAI_IMAGE_TRANSFER_ROOT,
+            ),
             image_handoff="external_inputs",
         ),
         "runway": CatalogEntry(
@@ -342,9 +360,6 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
         ),
     },
 }
-
-
-# --- Lookup helpers ---------------------------------------------------------
 
 
 def entries_for(slot: str) -> list[CatalogEntry]:

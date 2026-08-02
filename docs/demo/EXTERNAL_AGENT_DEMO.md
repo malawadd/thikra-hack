@@ -1,8 +1,11 @@
-# External buyer-agent demo
+# External buyer-agent regression
 
-Run `pnpm demo:agent`. A cross-platform Node orchestrator starts an isolated DEMO API on a free port, and the separate `apps/agent-client` application:
+Run `pnpm demo:agent` for automated contract coverage. The primary product
+experience is conversational Codex over MCP; this isolated DEMO client remains
+regression coverage. It starts an isolated API on a free port, and the separate
+`apps/agent-client` application:
 
-1. Connects with the official MCP TypeScript client and discovers 17 tools/six services.
+1. Connects with the official MCP TypeScript client and discovers 18 tools/six services.
 2. Selects `verified-vertical-ad`, requests a deterministic quote below USD 10, accepts it, and creates an order through the local SDK.
 3. Creates bounded authorization and explicitly confirms only the simulated demo payment via `--approve-demo`.
 4. Starts the existing fulfillment pipeline, observes the controlled verification failure, requests one bounded retry, and receives verified delivery.

@@ -81,7 +81,16 @@ External agents discover Thikra through `/.well-known/thikra-services.json`, the
 
 `ServiceOffer → Quote → CommercialOrder → authorization → payment → FulfillmentJob → existing GenerationRun → verified Deliverable → signed DeliveryReceipt → dispute/redress`.
 
-Six services are visible at `/services`; integration guidance is at `/developers`; authenticated orders are at `/commercial-orders`. The separate `apps/agent-client` proves the contract using the official MCP client and local `@thikra/sdk`. See the [external agent demo](docs/demo/EXTERNAL_AGENT_DEMO.md), [REST guide](docs/agent-gateway/REST.md), and [MCP guide](docs/agent-gateway/MCP.md).
+Six services are visible at `/services`; integration guidance is at `/developers`; authenticated orders are at `/commercial-orders`. The separate `apps/agent-client` is automated regression coverage using the official MCP client and local `@thikra/sdk`; conversational Codex MCP is the primary test experience. See the [agent-client regression](docs/demo/EXTERNAL_AGENT_DEMO.md), [REST guide](docs/agent-gateway/REST.md), and [MCP guide](docs/agent-gateway/MCP.md).
+
+For a conversational local test, connect Codex Desktop to the Streamable HTTP
+MCP endpoint and use the explicit local Sandbox test-fulfillment action. It
+runs configured providers and produces real B2-backed assets and verification
+without creating a Prava session; it is disabled by default, capped at USD 5,
+and its receipt explicitly records that no customer payment was collected. Run
+`pnpm codex:connect` to configure Codex interactively, `pnpm codex:update` to
+rotate the key, or `pnpm codex:disconnect` to remove it. See the [MCP
+guide](docs/agent-gateway/MCP.md) for setup.
 
 ## Architecture
 

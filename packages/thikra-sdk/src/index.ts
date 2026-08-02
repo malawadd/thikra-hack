@@ -53,6 +53,7 @@ export class ThikraClient {
       status: (id: string) => this.request<CommercialOrder>('GET', `/api/v1/orders/${id}`),
       events: (id: string) => this.request<{items: Record<string, unknown>[]}>('GET', `/api/v1/orders/${id}/events`),
       start: (id: string) => this.request<CommercialOrder>('POST', `/api/v1/orders/${id}/start`, {}, true),
+      startTestFulfillment: (id: string) => this.request<Record<string, any>>('POST', `/api/v1/orders/${id}/test-fulfillment`, {}, true),
       retry: (id: string, component='failed', reason='Verification failure') => this.request<CommercialOrder>('POST', `/api/v1/orders/${id}/retry`, { component, reason }, true),
       acceptDelivery: (id: string) => this.request<CommercialOrder>('POST', `/api/v1/orders/${id}/accept`, {}, true)
     };

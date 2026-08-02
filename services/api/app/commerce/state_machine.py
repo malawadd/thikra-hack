@@ -14,11 +14,12 @@ from app.thikra.service import workspace
 
 TRANSITIONS: dict[str, set[str]] = {
     "DRAFT": {"QUOTED", "CANCELLED"},
-    "QUOTED": {"QUOTE_EXPIRED", "PAYMENT_AUTHORIZATION_PENDING", "CANCELLED"},
+    "QUOTED": {"QUOTE_EXPIRED", "PAYMENT_AUTHORIZATION_PENDING", "TEST_AUTHORIZED", "CANCELLED"},
     "QUOTE_EXPIRED": set(),
     "PAYMENT_AUTHORIZATION_PENDING": {"PAYMENT_AUTHORIZED", "FAILED", "CANCELLED"},
     "PAYMENT_AUTHORIZED": {"PAYMENT_PENDING", "CANCELLED"},
     "PAYMENT_PENDING": {"PAID", "FAILED", "CANCELLED"},
+    "TEST_AUTHORIZED": {"ACCEPTED", "CANCELLED", "REDRESS_OPEN"},
     "PAID": {"ACCEPTED", "CANCELLED", "REDRESS_OPEN"},
     "ACCEPTED": {"FULFILLMENT_PENDING", "REDRESS_OPEN"},
     "FULFILLMENT_PENDING": {"FULFILLING", "FAILED", "REDRESS_OPEN"},
@@ -41,6 +42,7 @@ EVENT_BY_STATE = {
     "PAYMENT_AUTHORIZATION_PENDING": "order.payment_authorization_requested",
     "PAYMENT_AUTHORIZED": "order.payment_authorized",
     "PAYMENT_PENDING": "order.payment_pending",
+    "TEST_AUTHORIZED": "order.test_fulfillment_authorized",
     "PAID": "order.payment_succeeded",
     "ACCEPTED": "order.accepted",
     "FULFILLMENT_PENDING": "order.fulfillment_pending",

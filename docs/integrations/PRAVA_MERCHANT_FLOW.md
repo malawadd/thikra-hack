@@ -6,6 +6,18 @@ In `SANDBOX`/`PRODUCTION`, Thikra polls Prava's documented payment-result endpoi
 
 In `DEMO`, explicit confirmation creates a visibly `SIMULATED_PAID` record. No demo transaction is described as real. No raw card data, secret key, session credential, or one-time credential is persisted or logged.
 
+## Local agent test fulfillment
+
+For an end-to-end MCP generation test without a Prava session, a local API can
+opt into `THIKRA_AGENT_TEST_FULFILLMENT_ENABLED=true` while running
+`APP_MODE=SANDBOX`. This narrow path is loopback-only, requires the caller's
+`orders:test` scope, and rejects accepted quotes over
+`THIKRA_AGENT_TEST_MAX_QUOTE_MINOR` (500/USD 5 by default). It does not mark an
+order paid: it records `TEST_BYPASSED_NO_CUSTOMER_PAYMENT`, zero customer
+payment, and a signed test-labelled receipt. Configured Genblaze providers and
+B2 are still real and may incur charges. A no-failure local test run is
+auto-delivered only after verification; paid orders retain human approval.
+
 ## Focused sandbox diagnostic
 
 With `APP_MODE=SANDBOX` and matching `pk_test_` / `sk_test_` credentials, open

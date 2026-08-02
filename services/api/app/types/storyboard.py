@@ -50,5 +50,5 @@ class StoryboardSpec(BaseModel):
         ),
     )
     music_prompt: str = Field(description="Mood + genre instruction for the background score.")
-    total_duration_sec: float = Field(ge=15.0, le=30.0)
-    scenes: list[Scene] = Field(min_length=3, max_length=3)
+    total_duration_sec: float = Field(ge=4.0, le=30.0)
+    scenes: list[Scene] = Field(min_length=1, max_length=3)

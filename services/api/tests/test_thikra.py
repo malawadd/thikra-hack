@@ -142,6 +142,18 @@ def test_permitted_providers_and_zero_retry_budget_are_enforced(db: Session):
     }
 
 
+def test_provider_strategy_never_falls_back_to_a_forbidden_manual_provider(db: Session):
+    payload = brief_payload() | {"forbidden_providers": ["replicate"]}
+    compiled = compile_brief(db, BriefCreate.model_validate(payload))
+    confirm_mandate(db, compiled["mandate_id"])
+    with pytest.raises(ValueError, match="conflicts with the mandate"):
+        provider_strategy(
+            db,
+            compiled["mandate_id"],
+            {"image": {"vendor": "replicate", "model": "black-forest-labs/flux-schnell"}},
+        )
+
+
 def test_zero_value_sandbox_verification_can_request_fresh_session(
     db: Session, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ):

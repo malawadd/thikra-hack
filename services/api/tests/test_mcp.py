@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import httpx2
@@ -145,10 +146,12 @@ async def _retrieve_and_dispute(application: FastAPI, order_id: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_mcp_client_commercial_flow(mcp_environment: FastAPI):
+async def test_real_mcp_client_commercial_flow(
+    mcp_environment: FastAPI, monkeypatch: pytest.MonkeyPatch
+):
     async with mcp_app.router.lifespan_context(mcp_app):
         order_id, tool_names = await _create_commercial_order(mcp_environment)
-        assert len(tool_names) == 17
+        assert len(tool_names) == 18
         assert "thikra_request_quote" in tool_names
         headers = {"Authorization": f"Bearer {DEMO_KEY}"}
         with TestClient(mcp_environment) as rest:
@@ -176,3 +179,35 @@ async def test_real_mcp_client_commercial_flow(mcp_environment: FastAPI):
             )
             assert retried.json()["status"] == "DELIVERED"
         await _retrieve_and_dispute(mcp_environment, order_id)
+        monkeypatch.setattr(settings, "app_mode", "SANDBOX")
+        monkeypatch.setattr(settings, "thikra_api_base_url", "http://127.0.0.1:43192")
+        monkeypatch.setattr(settings, "thikra_agent_test_fulfillment_enabled", True)
+        monkeypatch.setattr(settings, "thikra_agent_test_max_quote_minor", 1000)
+        started: list[str] = []
+
+        async def fake_executor(test_order_id: str) -> None:
+            started.append(test_order_id)
+
+        monkeypatch.setattr(gateway, "execute_live_fulfillment", fake_executor)
+        test_order_id, tool_names = await _create_commercial_order(mcp_environment)
+        assert "thikra_start_test_fulfillment" in tool_names
+        client = await _mcp_session(mcp_environment)
+        async with (
+            client,
+            streamable_http_client("http://127.0.0.1:43192/mcp/", http_client=client) as (
+                read_stream,
+                write_stream,
+            ),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.initialize()
+            result = await session.call_tool(
+                "thikra_start_test_fulfillment", {"order_id": test_order_id}
+            )
+            assert result.is_error is False, result.content
+            assert result.structured_content["payment"]["payment_state"] == (
+                "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
+            )
+            assert result.structured_content["order"]["status"] == "FULFILLING"
+        await asyncio.sleep(0)
+        assert started == [test_order_id]

@@ -25,6 +25,7 @@ from app.thikra.audit import append_event, canonical_json
 from app.thikra.database import SessionLocal
 from app.thikra.models import Asset as DBAsset
 from app.thikra.models import Evaluation, EvaluationResult, GenerationRun, MandateVersion, Scene
+from app.thikra.service import mandate_schema
 from app.thikra.verification import inspect_file
 
 
@@ -100,6 +101,7 @@ def _persist_delivery(
         for index, scene in enumerate(scenes):
             scene.status = "COMPLETED"
             scene.verification_state = "PENDING"
+            generated_video = False
             if index < len(b1_result.run.steps):
                 assets = b1_result.run.steps[index].assets or []
                 if assets:
@@ -111,11 +113,14 @@ def _persist_delivery(
                 if assets:
                     choice = selection["video"]
                     add_asset(scene, assets[0], "video", choice["vendor"], choice["model"])
+                    generated_video = True
             if voice_index < len(b2_result.run.steps):
                 assets = b2_result.run.steps[voice_index].assets or []
                 if assets:
                     choice = selection["tts"]
                     add_asset(scene, assets[0], "narration", choice["vendor"], choice["model"])
+            if not generated_video:
+                scene.verification_state = "FAIL"
 
         final_record = add_asset(None, final_asset, "final", "ffmpeg", "composition")
         evaluation = Evaluation(
@@ -168,6 +173,21 @@ def _persist_delivery(
                     confidence_basis="Genblaze/composer observable output",
                 )
             )
+        for scene in scenes:
+            if scene.verification_state == "FAIL":
+                db.add(
+                    EvaluationResult(
+                        evaluation_id=evaluation.id,
+                        check_name="Required generated video",
+                        status="FAIL",
+                        explanation=(
+                            f"Scene {scene.position} has no provider-generated video asset; "
+                            "a keyframe fallback cannot satisfy a video order."
+                        ),
+                        evidence_json=canonical_json({"scene_id": scene.id}),
+                        confidence_basis="Genblaze pipeline output",
+                    )
+                )
         db.add(
             EvaluationResult(
                 evaluation_id=evaluation.id,
@@ -206,23 +226,47 @@ async def execute_generation_run(run_id: str) -> None:
             )
             selection = json.loads(run.provider_selection_json)
             prompt = "\n".join(scene.prompt for scene in scenes)
+            mandate_id = run.mandate_id
+            mandate_version_number = run.mandate_version
+            mandate_version = db.scalar(
+                select(MandateVersion).where(
+                    MandateVersion.mandate_id == mandate_id,
+                    MandateVersion.version == mandate_version_number,
+                )
+            )
+            mandate_policy = mandate_schema(mandate_version)
+            canvas = tuple(
+                int(part) for part in mandate_policy["required_resolution"].lower().split("x")
+            )
 
         chat_choice = selection["chat"]
         image_choice = selection["image"]
         video_choice = selection["video"]
         tts_choice = selection["tts"]
-        music_choice = selection["music"]
+        music_choice = selection.get("music")
         image_entry = catalog.resolve(catalog.IMAGE, image_choice["vendor"])
         video_entry = catalog.resolve(catalog.VIDEO, video_choice["vendor"])
         tts_entry = catalog.resolve(catalog.TTS, tts_choice["vendor"])
-        music_entry = catalog.resolve(catalog.MUSIC, music_choice["vendor"])
+        music_entry = (
+            catalog.resolve(catalog.MUSIC, music_choice["vendor"]) if music_choice else None
+        )
 
         _record(
             run_id,
             "storyboard.generation.started",
             "OpenAI structured storyboard generation started",
         )
-        spec, _ = await asyncio.to_thread(generate_storyboard, prompt, chat_choice["model"])
+        scene_count = len(scenes)
+        scene_duration = 5
+        if scene_count == 1:
+            scene_duration = int(mandate_policy["required_duration_sec"])
+        spec, _ = await asyncio.to_thread(
+            generate_storyboard,
+            prompt,
+            chat_choice["model"],
+            scene_count=scene_count,
+            scene_duration=scene_duration,
+        )
         spec = spec.model_copy(
             update={
                 "scenes": [
@@ -267,13 +311,15 @@ async def execute_generation_run(run_id: str) -> None:
                 tts_entry=tts_entry,
                 tts_model=tts_choice["model"],
                 music_entry=music_entry,
-                music_model=music_choice["model"],
+                music_model=music_choice["model"] if music_choice else None,
             ),
             timeout=settings.max_run_duration_sec,
             best_effort=True,
         )
         _record(run_id, "composition.started", "ffmpeg composition started")
-        final_asset, notices = await asyncio.to_thread(compose_final, b2_result, b1_result, spec)
+        final_asset, notices = await asyncio.to_thread(
+            compose_final, b2_result, b1_result, spec, canvas
+        )
         await asyncio.to_thread(
             _persist_delivery, run_id, spec, b1_result, b2_result, final_asset, notices
         )

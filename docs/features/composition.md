@@ -29,7 +29,9 @@ this.
 
 1. **Concat per-scene visuals** into a visual-only `video.mp4` using the
    concat *filter* (not the demuxer), normalizing every input to a common
-   1280×720 / 30fps canvas:
+   30fps canvas. The standalone sample defaults to 1280×720; a commercial
+   order passes its confirmed mandate resolution (for example, 720×1280) so
+   vertical orders remain vertical:
 
    ```
    ffmpeg -y -i scene0.mp4 -loop 1 -t 8 -i scene1_still.png ... \

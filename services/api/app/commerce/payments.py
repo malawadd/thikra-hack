@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +17,92 @@ from app.thikra.audit import canonical_json
 from app.thikra.models import PaymentEvent, PaymentRecord
 from app.thikra.payments import EPHEMERAL_CREDENTIALS, gateway, sanitize_payment_result
 from app.thikra.service import workspace
+
+TEST_BYPASS_GATEWAY = "TEST_BYPASS"
+TEST_BYPASS_PAYMENT_STATE = "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
+
+
+def _local_sandbox_test_fulfillment_enabled() -> bool:
+    """Whether this process may spend provider credits without customer payment."""
+    host = urlparse(settings.thikra_api_base_url).hostname
+    return (
+        settings.app_mode.upper() == "SANDBOX"
+        and settings.thikra_agent_test_fulfillment_enabled
+        and host in {"127.0.0.1", "localhost", "::1"}
+    )
+
+
+def authorize_test_fulfillment(
+    db: Session, auth: AuthContext, order: CommercialOrder
+) -> PaymentRecord:
+    """Record a local SANDBOX-only, non-payment authorization for live testing."""
+    auth.require("orders:test")
+    require_order_owner(db, auth, order)
+    if not _local_sandbox_test_fulfillment_enabled():
+        raise ValueError(
+            "Local Sandbox test fulfillment is disabled or this API host is not loopback"
+        )
+    if order.quoted_total_minor > settings.thikra_agent_test_max_quote_minor:
+        raise ValueError(
+            "Test fulfillment quote exceeds the configured local Sandbox spend cap"
+        )
+    existing = db.scalar(select(PaymentRecord).where(PaymentRecord.commercial_order_id == order.id))
+    if existing:
+        if existing.gateway == TEST_BYPASS_GATEWAY and order.status == "TEST_AUTHORIZED":
+            return existing
+        raise ValueError("Order already has a payment or fulfillment authorization")
+    if order.status != "QUOTED":
+        raise ValueError("Test fulfillment requires a newly quoted order")
+
+    payment = PaymentRecord(
+        workspace_id=workspace(db).id,
+        mandate_id=None,
+        commercial_order_id=order.id,
+        run_id=None,
+        gateway=TEST_BYPASS_GATEWAY,
+        environment="SANDBOX",
+        external_session_id=None,
+        external_order_id=None,
+        merchant=settings.thikra_merchant_name,
+        currency=order.currency,
+        maximum_amount_minor=order.quoted_total_minor,
+        invoked_amount_minor=0,
+        paid_amount_minor=0,
+        authorization_state="TEST_AUTHORIZED",
+        payment_state=TEST_BYPASS_PAYMENT_STATE,
+        expires_at=None,
+        direction="CUSTOMER_TO_THIKRA",
+    )
+    db.add(payment)
+    db.flush()
+    db.add(
+        PaymentEvent(
+            payment_id=payment.id,
+            event_type="order.test_fulfillment_authorized",
+            sanitized_payload_json=canonical_json(
+                {
+                    "customer_payment_collected": False,
+                    "provider_spend_may_occur": True,
+                    "quote_cap_minor": settings.thikra_agent_test_max_quote_minor,
+                }
+            ),
+            idempotency_key=f"commerce-test-fulfillment:{order.id}",
+        )
+    )
+    transition_order(
+        db,
+        order,
+        "TEST_AUTHORIZED",
+        actor_type="AGENT",
+        actor_id=order.buyer_agent_id,
+        payload={
+            "customer_payment_collected": False,
+            "provider_spend_may_occur": True,
+            "quote_cap_minor": settings.thikra_agent_test_max_quote_minor,
+        },
+    )
+    db.commit()
+    return payment
 
 
 def serialize_commerce_payment(payment: PaymentRecord, order: CommercialOrder) -> dict:

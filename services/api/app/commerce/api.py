@@ -34,6 +34,7 @@ from app.commerce.models import (
 )
 from app.commerce.payments import (
     approve_demo_payment,
+    authorize_test_fulfillment,
     create_payment_authorization,
     reconcile_authorization,
     record_merchant_charge,
@@ -490,6 +491,35 @@ def start_order_route(
         response = serialize_order(db, order, detail=True)
         return _remember(
             db, auth, "fulfillment.start", key, payload, "fulfillment_job", job.id, response
+        )
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.post("/orders/{order_id}/test-fulfillment")
+def start_test_fulfillment_route(
+    order_id: str,
+    background: BackgroundTasks,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    auth: AuthContext = Depends(auth_context),
+    db: Session = Depends(get_db),
+):
+    key = _key(idempotency_key)
+    payload = {"order_id": order_id}
+    cached = _cached(db, auth, "fulfillment.test-start", key, payload)
+    if cached:
+        return cached
+    try:
+        order = _order(db, order_id)
+        payment = authorize_test_fulfillment(db, auth, order)
+        job = start_order(db, auth, order)
+        background.add_task(execute_live_fulfillment, order.id)
+        response = {
+            "payment": serialize_commerce_payment(payment, order),
+            "order": serialize_order(db, order, detail=True),
+        }
+        return _remember(
+            db, auth, "fulfillment.test-start", key, payload, "fulfillment_job", job.id, response
         )
     except Exception as exc:
         raise _translate(exc) from exc

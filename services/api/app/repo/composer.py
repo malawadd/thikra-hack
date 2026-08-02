@@ -216,17 +216,17 @@ def _run_ffmpeg(args: list[str], *, stage: str) -> None:
     })
 
 
-# Canonical output canvas. Every scene clip — real Decart video or a
-# keyframe-still fallback — is scaled+padded to this, so the concat filter
-# never trips over mismatched source dimensions / SAR.
-_CANVAS_W, _CANVAS_H, _FPS = 1280, 720, 30
-_NORMALIZE = (
-    f"scale={_CANVAS_W}:{_CANVAS_H}:force_original_aspect_ratio=decrease,"
-    f"pad={_CANVAS_W}:{_CANVAS_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={_FPS}"
-)
+# Default output canvas for the standalone sample endpoint. Commerce passes
+# the confirmed mandate's required resolution so portrait orders stay portrait.
+_DEFAULT_CANVAS = (1280, 720)
+_FPS = 30
+
+def _normalize_filter(canvas: tuple[int, int]) -> str:
+    width, height = canvas
+    return f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={_FPS}"
 
 
-def _concat_video(scenes: list[_SceneBundle], tmp: Path) -> Path:
+def _concat_video(scenes: list[_SceneBundle], tmp: Path, canvas: tuple[int, int] = _DEFAULT_CANVAS) -> Path:
     """Concat per-scene visuals into one silent mp4, normalizing every input.
 
     Uses the concat *filter* (not the demuxer) so real Decart clips and
@@ -243,7 +243,7 @@ def _concat_video(scenes: list[_SceneBundle], tmp: Path) -> Path:
             inputs += ["-i", str(s.video_path)]
         else:
             inputs += ["-loop", "1", "-t", str(s.duration), "-i", str(s.still_path)]
-        filters.append(f"[{idx}:v]{_NORMALIZE}[v{idx}]")
+        filters.append(f"[{idx}:v]{_normalize_filter(canvas)}[v{idx}]")
         labels.append(f"[v{idx}]")
     filters.append(f"{''.join(labels)}concat=n={len(scenes)}:v=1:a=0[outv]")
     out = tmp / "video.mp4"
@@ -454,7 +454,7 @@ def _sha256(data: bytes) -> str:
 
 # --- Public entry point -----------------------------------------------------
 
-def compose_final(b2_run, b1_run, spec: StoryboardSpec) -> tuple[Asset, list[str]]:
+def compose_final(b2_run, b1_run, spec: StoryboardSpec, canvas: tuple[int, int] = _DEFAULT_CANVAS) -> tuple[Asset, list[str]]:
     """Concat scenes, mix available narration + music, burn captions, upload to B2.
 
     `b1_run` is the Stage B1 keyframe result — its assets back the video
@@ -483,7 +483,7 @@ def compose_final(b2_run, b1_run, spec: StoryboardSpec) -> tuple[Asset, list[str
             "degradation_notices": notices,
         })
 
-        video_only = _concat_video(scenes, tmp)
+        video_only = _concat_video(scenes, tmp, canvas)
         audio_mix = _mix_audio(scenes, music_path, tmp)
         final_path = _finalize_with_captions(video_only, audio_mix, scenes, tmp, notices)
 

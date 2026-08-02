@@ -93,7 +93,7 @@ def _make_b1_run(n: int = 3, *, keyframe_scenes: set[int] | None = None):
     return SimpleNamespace(run=SimpleNamespace(steps=steps, run_id="kf-run-id"))
 
 
-def _run_compose(b2_run, spec, b1_run=None, *, has_subtitles=True):
+def _run_compose(b2_run, spec, b1_run=None, *, has_subtitles=True, canvas=(1280, 720)):
     """Run compose_final with B2 IO + ffmpeg mocked; return (asset, notices, ffmpeg_calls).
 
     Each ffmpeg stage writes its output file (args[-1]) so the next stage /
@@ -121,7 +121,7 @@ def _run_compose(b2_run, spec, b1_run=None, *, has_subtitles=True):
         patch.object(composer.shutil, "which", return_value="/usr/bin/ffmpeg"),
         patch.object(composer.Mp4Handler, "embed", return_value=None),
     ):
-        asset, notices = composer.compose_final(b2_run, b1_run, spec)
+        asset, notices = composer.compose_final(b2_run, b1_run, spec, canvas)
     return asset, notices, calls
 
 
@@ -129,6 +129,13 @@ def _filter_for(calls, stage: str) -> str:
     """Extract the -filter_complex value from a recorded ffmpeg invocation."""
     args = next(a for s, a in calls if s == stage)
     return args[args.index("-filter_complex") + 1]
+
+
+def test_compose_final_uses_the_commerce_mandate_canvas() -> None:
+    _, _, calls = _run_compose(_make_b2_run(1), _make_spec(1), canvas=(720, 1280))
+
+    assert "scale=720:1280" in _filter_for(calls, "concat")
+    assert "pad=720:1280" in _filter_for(calls, "concat")
 
 
 def test_group_scenes_pairs_video_and_narration(tmp_path: Path) -> None:

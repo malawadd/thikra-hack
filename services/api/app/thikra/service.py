@@ -441,7 +441,13 @@ def confirm_mandate(db: Session, mandate_id: str) -> dict:
     return {"status": mandate.status, "mandate": mandate_schema(version)}
 
 
-def provider_strategy(db: Session, mandate_id: str, selections: dict | None = None) -> dict:
+def provider_strategy(
+    db: Session,
+    mandate_id: str,
+    selections: dict | None = None,
+    *,
+    slots: set[str] | None = None,
+) -> dict:
     mandate = db.get(Mandate, mandate_id)
     if mandate is None:
         raise LookupError("Mandate not found")
@@ -460,6 +466,8 @@ def provider_strategy(db: Session, mandate_id: str, selections: dict | None = No
     base_cost = {"chat": 2, "image": 18, "video": 105, "tts": 8, "music": 15}
     latency = {"chat": 4, "image": 18, "video": 95, "tts": 7, "music": 35}
     for slot, entries in matrix.items():
+        if slots is not None and slot not in slots:
+            continue
         candidates = []
         for position, entry in enumerate(entries):
             configured = entry["key_available"] or settings.app_mode == "DEMO"
@@ -507,12 +515,20 @@ def provider_strategy(db: Session, mandate_id: str, selections: dict | None = No
             )
         candidates.sort(key=lambda item: item["score"], reverse=True)
         manual = (selections or {}).get(slot)
-        chosen = next(
-            (c for c in candidates if manual and c["vendor"] == manual.get("vendor")), None
-        )
-        chosen = chosen or next(
-            (c for c in candidates if c["configured"] and c["compliant"]), candidates[0]
-        )
+        if manual:
+            chosen = next((c for c in candidates if c["vendor"] == manual.get("vendor")), None)
+            if chosen is None:
+                raise ValueError(f"Selected provider '{manual.get('vendor')}' is unavailable for {slot}")
+            if not chosen["compliant"]:
+                raise ValueError(f"Selected provider '{chosen['vendor']}' conflicts with the mandate for {slot}")
+            if not chosen["configured"]:
+                raise ValueError(f"Selected provider '{chosen['vendor']}' is not configured for {slot}")
+        else:
+            chosen = next(
+                (c for c in candidates if c["configured"] and c["compliant"]), None
+            )
+            if chosen is None:
+                raise ValueError(f"No configured mandate-compliant provider is available for {slot}")
         selection[slot] = {
             "vendor": chosen["vendor"],
             "model": (manual or {}).get("model") or chosen["default_model"],
@@ -598,6 +614,12 @@ def launch_run(
             "\u0646\u0648\u0631\u0629 \u062c\u0644\u0648\u060c \u0625\u0634\u0631\u0627\u0642\u0629 \u062f\u0627\u0641\u0626\u0629 \u0628\u0637\u0631\u064a\u0642\u062a\u0643.",
         ),
     ]
+    required_duration = int(schema["required_duration_sec"])
+    # A short single-clip order must not silently expand into the legacy
+    # three-scene explainer shape.  Longer products keep its three 5-second
+    # beats; the local smoke path uses one provider clip at the quoted length.
+    if required_duration <= 5:
+        planned_scenes = planned_scenes[:1]
     for position, (prompt, narration) in enumerate(planned_scenes, start=1):
         db.add(
             Scene(

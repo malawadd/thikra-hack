@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     thikra_rate_limit_requests: int = 120
     thikra_quote_rate_limit_requests: int = 30
     thikra_rate_limit_window_seconds: int = 60
+    # Local-only escape hatch for exercising the real agent fulfillment path
+    # without collecting customer payment. Never enable this outside a local
+    # SANDBOX API host; the commerce service enforces that boundary too.
+    thikra_agent_test_fulfillment_enabled: bool = False
+    thikra_agent_test_max_quote_minor: int = 500
     thikra_default_currency: str = "USD"
     thikra_platform_margin_bps: int = 1200
     thikra_storage_fee_minor: int = 20
