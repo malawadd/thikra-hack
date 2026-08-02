@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
+from hashlib import sha256
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -20,6 +21,76 @@ from app.thikra.service import workspace
 
 TEST_BYPASS_GATEWAY = "TEST_BYPASS"
 TEST_BYPASS_PAYMENT_STATE = "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
+
+
+def _aware_utc(value: datetime) -> datetime:
+    """SQLite can round-trip timezone-aware DateTime values without tzinfo."""
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _prava_authorization_completed(sanitized_result: dict) -> bool:
+    """Prava keeps the parent session awaiting merchant reporting after card approval."""
+    if sanitized_result.get("status") == "completed":
+        return True
+    return any(
+        item.get("status") == "credentials_generated"
+        for transaction in sanitized_result.get("transactions", [])
+        for item in transaction.get("line_items", [])
+    )
+
+
+def _prava_transaction_reference(sanitized_result: dict) -> str | None:
+    return next(
+        (
+            item.get("txn_ref_id")
+            for transaction in sanitized_result.get("transactions", [])
+            for item in transaction.get("line_items", [])
+            if item.get("txn_ref_id")
+        ),
+        None,
+    )
+
+
+def _sandbox_auto_settlement_enabled() -> bool:
+    return settings.app_mode.upper() == "SANDBOX" and settings.thikra_sandbox_auto_settle_prava
+
+
+def _authorization_request(
+    order: CommercialOrder, user_id: str, user_email: str, *, refresh_of: str | None = None
+) -> dict:
+    suffix = f"-refresh-{sha256(refresh_of.encode()).hexdigest()[:16]}" if refresh_of else ""
+    return {
+        "mandate_id": f"commercial-order:{order.id}",
+        "maximum_amount_minor": order.quoted_total_minor,
+        "currency": order.currency,
+        "user_id": user_id,
+        "user_email": user_email,
+        "merchant": settings.thikra_merchant_name,
+        "merchant_url": settings.thikra_merchant_url or settings.public_web_url,
+        "integration_type": "full_checkout",
+        "idempotency_key": f"commerce-payment-{order.id}{suffix}",
+    }
+
+
+def _safe_checkout(
+    order: CommercialOrder, result: dict, *, requires_fresh_checkout: bool = False
+) -> dict:
+    """Hosted URL only; never return a session token or one-time credential."""
+    checkout_url = result.get("iframe_url")
+    return {
+        "checkout_url": checkout_url,
+        "expires_at": result.get("expires_at"),
+        "amount_minor": order.quoted_total_minor,
+        "currency": order.currency,
+        "merchant": settings.thikra_merchant_name,
+        "single_use": True,
+        "human_action_required": (
+            "Open the secure checkout on one device, or scan its QR code on your phone. "
+            "Do not use both: each Prava checkout session is single-use."
+        ),
+        "requires_fresh_checkout": requires_fresh_checkout,
+        "simulated": bool(result.get("simulated")),
+    }
 
 
 def _local_sandbox_test_fulfillment_enabled() -> bool:
@@ -43,9 +114,7 @@ def authorize_test_fulfillment(
             "Local Sandbox test fulfillment is disabled or this API host is not loopback"
         )
     if order.quoted_total_minor > settings.thikra_agent_test_max_quote_minor:
-        raise ValueError(
-            "Test fulfillment quote exceeds the configured local Sandbox spend cap"
-        )
+        raise ValueError("Test fulfillment quote exceeds the configured local Sandbox spend cap")
     existing = db.scalar(select(PaymentRecord).where(PaymentRecord.commercial_order_id == order.id))
     if existing:
         if existing.gateway == TEST_BYPASS_GATEWAY and order.status == "TEST_AUTHORIZED":
@@ -139,12 +208,15 @@ async def create_payment_authorization(
     require_order_owner(db, auth, order)
     existing = db.scalar(select(PaymentRecord).where(PaymentRecord.commercial_order_id == order.id))
     if existing:
-        return existing, {
-            "approval_url": f"{settings.public_web_url}/orders/{order.public_order_number}",
-            "simulated": existing.gateway == "DEMO",
-            "expires_at": existing.expires_at.isoformat() if existing.expires_at else None,
-        }
-    event = transition_order(
+        return existing, _safe_checkout(
+            order,
+            {
+                "expires_at": existing.expires_at.isoformat() if existing.expires_at else None,
+                "simulated": existing.gateway == "DEMO",
+            },
+            requires_fresh_checkout=True,
+        )
+    transition_order(
         db,
         order,
         "PAYMENT_AUTHORIZATION_PENDING",
@@ -152,18 +224,9 @@ async def create_payment_authorization(
         actor_id=order.buyer_agent_id,
         payload={"amount_minor": order.quoted_total_minor, "currency": order.currency},
     )
-    request = {
-        "mandate_id": f"commercial-order:{order.id}",
-        "maximum_amount_minor": order.quoted_total_minor,
-        "currency": order.currency,
-        "user_id": user_id,
-        "user_email": user_email,
-        "merchant": settings.thikra_merchant_name,
-        "merchant_url": settings.thikra_merchant_url or settings.public_web_url,
-        "integration_type": "full_checkout",
-        "idempotency_key": f"commerce-payment-{order.id}",
-    }
-    result = await gateway().create_authorization(request)
+    result = await gateway().create_authorization(
+        _authorization_request(order, user_id, user_email)
+    )
     expires_at = datetime.fromisoformat(result["expires_at"].replace("Z", "+00:00"))
     payment = PaymentRecord(
         workspace_id=workspace(db).id,
@@ -201,20 +264,64 @@ async def create_payment_authorization(
         )
     )
     db.commit()
-    checkout = {
-        "approval_url": result.get("iframe_url")
-        or f"{settings.public_web_url}/orders/{order.public_order_number}",
-        "iframe_url": result.get("iframe_url"),
-        "session_token": result.get("session_token"),
-        "publishable_key": settings.prava_publishable_key if not result.get("simulated") else None,
-        "expires_at": result["expires_at"],
-        "amount_minor": order.quoted_total_minor,
-        "currency": order.currency,
-        "merchant": settings.thikra_merchant_name,
-        "simulated": bool(result.get("simulated")),
-        "order_event_id": event.id,
-    }
-    return payment, checkout
+    return payment, _safe_checkout(order, result)
+
+
+async def refresh_payment_authorization(
+    db: Session,
+    auth: AuthContext,
+    order: CommercialOrder,
+    *,
+    user_id: str,
+    user_email: str,
+) -> tuple[PaymentRecord, dict]:
+    """Revoke an unused hosted session before issuing its single replacement."""
+    auth.require("payments:create")
+    require_order_owner(db, auth, order)
+    payment = db.scalar(select(PaymentRecord).where(PaymentRecord.commercial_order_id == order.id))
+    if payment is None:
+        raise LookupError("Payment authorization not found")
+    if payment.gateway != "PRAVA" or order.status != "PAYMENT_AUTHORIZATION_PENDING":
+        raise ValueError("Only a pending Prava checkout can be replaced")
+    if payment.authorization_state not in {"AUTHORIZATION_PENDING", "EXPIRED"}:
+        raise ValueError("Payment authorization can no longer be replaced")
+    prior_session_id = payment.external_session_id
+    refresh_key_suffix = sha256(prior_session_id.encode()).hexdigest()[:16]
+    await gateway().revoke(prior_session_id)
+    db.add(
+        PaymentEvent(
+            payment_id=payment.id,
+            event_type="order.payment_authorization_revoked",
+            sanitized_payload_json=canonical_json(
+                {"session_id": prior_session_id, "reason": "fresh_checkout_requested"}
+            ),
+            idempotency_key=f"commerce-auth-revoke:{order.id}:{refresh_key_suffix}",
+        )
+    )
+    result = await gateway().create_authorization(
+        _authorization_request(order, user_id, user_email, refresh_of=prior_session_id)
+    )
+    payment.external_session_id = result["session_id"]
+    payment.external_order_id = result.get("order_id")
+    payment.expires_at = datetime.fromisoformat(result["expires_at"].replace("Z", "+00:00"))
+    payment.authorization_state = "AUTHORIZATION_PENDING"
+    payment.payment_state = "AWAITING_USER_APPROVAL"
+    db.add(
+        PaymentEvent(
+            payment_id=payment.id,
+            event_type="order.payment_authorization_refreshed",
+            sanitized_payload_json=canonical_json(
+                {
+                    "session_id": result["session_id"],
+                    "order_id": result.get("order_id"),
+                    "simulated": False,
+                }
+            ),
+            idempotency_key=f"commerce-auth-refresh:{order.id}:{refresh_key_suffix}",
+        )
+    )
+    db.commit()
+    return payment, _safe_checkout(order, result)
 
 
 def approve_demo_payment(
@@ -291,12 +398,20 @@ async def reconcile_authorization(
         raise LookupError("Payment authorization not found")
     if payment.gateway == "DEMO":
         return payment, {"status": "awaiting_explicit_demo_approval", "simulated": True}
+    if payment.expires_at and _aware_utc(payment.expires_at) <= datetime.now(UTC):
+        payment.authorization_state = "EXPIRED"
+        payment.payment_state = "EXPIRED"
+        db.commit()
+        return payment, {"status": "expired"}
     result = await gateway().get_authorization(payment.external_session_id)
     sanitized, credentials = sanitize_payment_result(result)
     if credentials:
         EPHEMERAL_CREDENTIALS[payment.external_session_id] = credentials
     status = sanitized.get("status", "pending")
-    if status == "completed" and order.status == "PAYMENT_AUTHORIZATION_PENDING":
+    if (
+        _prava_authorization_completed(sanitized)
+        and order.status == "PAYMENT_AUTHORIZATION_PENDING"
+    ):
         payment.authorization_state = "AUTHORIZED"
         order.authorized_total_minor = order.quoted_total_minor
         transition_order(
@@ -313,11 +428,47 @@ async def reconcile_authorization(
             "PAYMENT_PENDING",
             actor_type="SYSTEM",
             actor_id="thikra-merchant-payment",
-            payload={
-                "message": "Prava authorization is complete; a documented merchant charge confirmation is still required."
-            },
+            payload={"message": "Prava authorization is complete."},
         )
-        payment.payment_state = "MERCHANT_CHARGE_REQUIRED"
+    if _prava_authorization_completed(sanitized) and order.status == "PAYMENT_PENDING":
+        txn_ref_id = _prava_transaction_reference(sanitized)
+        if _sandbox_auto_settlement_enabled() and txn_ref_id:
+            reported = await gateway().report_outcome(
+                payment.external_session_id,
+                {"txn_ref_id": txn_ref_id, "txn_status": "APPROVED"},
+            )
+            EPHEMERAL_CREDENTIALS.pop(payment.external_session_id, None)
+            payment.invoked_amount_minor = 0
+            payment.paid_amount_minor = 0
+            payment.payment_state = "SANDBOX_SETTLED_NO_REAL_FUNDS"
+            transition_order(
+                db,
+                order,
+                "PAID",
+                actor_type="SYSTEM",
+                actor_id="sandbox-prava-settlement",
+                payload={
+                    "sandbox_test_settlement": True,
+                    "customer_payment_collected": False,
+                    "quoted_amount_minor": order.quoted_total_minor,
+                },
+            )
+            db.add(
+                PaymentEvent(
+                    payment_id=payment.id,
+                    event_type="order.sandbox_payment_settled",
+                    sanitized_payload_json=canonical_json(
+                        {
+                            "customer_payment_collected": False,
+                            "prava_status_reported": "APPROVED",
+                            "gateway_response_status": reported.get("status"),
+                        }
+                    ),
+                    idempotency_key=f"commerce-sandbox-settlement:{order.id}",
+                )
+            )
+        else:
+            payment.payment_state = "MERCHANT_CHARGE_REQUIRED"
     elif status == "failed" and order.status == "PAYMENT_AUTHORIZATION_PENDING":
         payment.authorization_state = "FAILED"
         payment.payment_state = "FAILED"

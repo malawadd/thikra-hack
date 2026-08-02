@@ -14,8 +14,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.commerce import api as commerce_api
+from app.commerce import payments as commerce_payments
 from app.commerce.api import router
 from app.commerce.models import APIKey, CommercialOrder, FulfillmentJob, Quote, ServiceOffer
+from app.commerce.payments import _aware_utc
 from app.commerce.pricing import quote_breakdown
 from app.commerce.rate_limit import SlidingWindowRateLimiter
 from app.commerce.receipts import sign_receipt, verify_receipt
@@ -131,6 +133,11 @@ def test_agent_gateway_sliding_window_rate_limit(monkeypatch: pytest.MonkeyPatch
     assert limited.allowed is False
     assert limited.retry_after == 58
     assert limiter.check(request, now=161.0).allowed is True
+
+
+def test_sqlite_payment_expiry_is_normalized_to_utc() -> None:
+    normalized = _aware_utc(datetime(2026, 8, 2, 19, 54, 34))
+    assert normalized.tzinfo is UTC
 
 
 def test_seeded_catalog_and_deterministic_pricing(commerce_db: Session):
@@ -330,6 +337,102 @@ def test_complete_external_agent_rest_flow(commerce_client: TestClient, commerce
     assert dispute.json()["status"] == "OPEN"
 
 
+def test_sandbox_commercial_checkout_is_safe_and_can_be_replaced(
+    commerce_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    class FakePravaGateway:
+        def __init__(self) -> None:
+            self.created: list[dict] = []
+            self.revoked: list[str] = []
+
+        async def create_authorization(self, request: dict) -> dict:
+            self.created.append(request)
+            suffix = str(len(self.created))
+            return {
+                "session_id": f"prava-session-{suffix}",
+                "session_token": f"must-not-leak-{suffix}",
+                "iframe_url": f"https://sandbox.collect.prava.space/session/{suffix}",
+                "order_id": f"prava-order-{suffix}",
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+            }
+
+        async def revoke(self, session_id: str) -> dict:
+            self.revoked.append(session_id)
+            return {"success": True, "session_id": session_id}
+
+        async def get_authorization(self, session_id: str) -> dict:
+            return {
+                "session_id": session_id,
+                "status": "awaiting_result",
+                "transactions": [
+                    {
+                        "status": "awaiting_result",
+                        "line_items": [
+                            {
+                                "txn_ref_id": "sandbox-transaction",
+                                "status": "credentials_generated",
+                                "token": "network-token-never-returned",
+                                "dynamic_cvv": "123",
+                                "expiry_month": "12",
+                                "expiry_year": "2027",
+                            }
+                        ],
+                    }
+                ],
+            }
+
+        async def report_outcome(self, session_id: str, body: dict) -> dict:
+            return {"session_id": session_id, "status": "approved", **body}
+
+    fake = FakePravaGateway()
+    monkeypatch.setattr(settings, "app_mode", "SANDBOX")
+    monkeypatch.setattr(settings, "thikra_sandbox_auto_settle_prava", True)
+    monkeypatch.setattr(commerce_payments, "gateway", lambda: fake)
+    quote = commerce_client.post(
+        "/api/v1/quotes", json=_quote_payload(), headers=_headers("sandbox-link-q")
+    )
+    assert quote.status_code == 201
+    accepted = commerce_client.post(
+        f"/api/v1/quotes/{quote.json()['id']}/accept", headers=_headers("sandbox-link-a")
+    )
+    assert accepted.status_code == 200
+    order = commerce_client.post(
+        "/api/v1/orders", json={"quote_id": quote.json()["id"]}, headers=_headers("sandbox-link-o")
+    ).json()
+    authorization = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/payment-authorization",
+        json={"user_id": "sandbox-buyer", "user_email": "buyer@nouraglow.sa"},
+        headers=_headers("sandbox-link-p"),
+    )
+    assert authorization.status_code == 201, authorization.text
+    checkout = authorization.json()["checkout"]
+    assert checkout["checkout_url"] == "https://sandbox.collect.prava.space/session/1"
+    assert checkout["single_use"] is True
+    assert "session_token" not in checkout
+    assert "must-not-leak" not in authorization.text
+    assert authorization.json()["payment"]["paid_amount_minor"] == 0
+
+    refreshed = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/payment-authorization/refresh",
+        json={"user_id": "sandbox-buyer", "user_email": "buyer@nouraglow.sa"},
+        headers=_headers("sandbox-link-r"),
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert fake.revoked == ["prava-session-1"]
+    assert refreshed.json()["checkout"]["checkout_url"].endswith("/2")
+    blocked = commerce_client.post(
+        f"/api/v1/orders/{order['id']}/start", headers=_headers("sandbox-link-start")
+    )
+    assert blocked.status_code == 409
+    status = commerce_client.get(
+        f"/api/v1/orders/{order['id']}/payment",
+        headers={"Authorization": f"Bearer {DEMO_KEY}"},
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["payment"]["payment_state"] == "SANDBOX_SETTLED_NO_REAL_FUNDS"
+    assert "network-token-never-returned" not in status.text
+
+
 def test_commerce_provider_constraints_normalize_and_are_enforced(
     commerce_client: TestClient, commerce_db: Session
 ):
@@ -426,7 +529,9 @@ def test_test_fulfillment_enforces_local_sandbox_scope_and_cap(
     quote = commerce_client.post(
         "/api/v1/quotes", json=_quote_payload(), headers=_headers("test-guard-quote")
     ).json()
-    commerce_client.post(f"/api/v1/quotes/{quote['id']}/accept", headers=_headers("test-guard-accept"))
+    commerce_client.post(
+        f"/api/v1/quotes/{quote['id']}/accept", headers=_headers("test-guard-accept")
+    )
     order = commerce_client.post(
         "/api/v1/orders", json={"quote_id": quote["id"]}, headers=_headers("test-guard-order")
     ).json()

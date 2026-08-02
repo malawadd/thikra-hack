@@ -52,7 +52,9 @@ mcp_server = MCPServer(
     description="Discover, purchase, fulfill, and retrieve verified creative services.",
     instructions=(
         "Use the service catalog and deterministic quote before creating an order. "
-        "Payment authorization always requires a human; generation is not delivery, "
+        "For payment: create authorization, present checkout_url as a clickable link and render a QR code encoding that exact URL before the human opens it. "
+        "then call thikra_wait_for_payment. A Prava completion becomes MERCHANT_CHARGE_REQUIRED; "
+        "do not start fulfillment until a documented exact merchant charge is recorded. Generation is not delivery, "
         "and delivery is not buyer acceptance. Use test fulfillment only when the user "
         "explicitly requests a local Sandbox test: it creates real provider spend but no customer payment."
     ),
@@ -134,14 +136,28 @@ def thikra_get_order(order_id: str) -> dict[str, Any]:
 async def thikra_create_payment_authorization(
     order_id: str, user_id: str, user_email: str
 ) -> dict[str, Any]:
-    """Create bounded Prava authorization and return only safe approval metadata."""
+    """Create one hosted Prava checkout; show its URL/QR to a human on one device only."""
     return await gateway.create_authorization(_identity(), order_id, user_id, user_email)
+
+
+@mcp_server.tool(name="thikra_refresh_payment_authorization")
+async def thikra_refresh_payment_authorization(
+    order_id: str, user_id: str, user_email: str
+) -> dict[str, Any]:
+    """Revoke an unused checkout and return one fresh link for the human or QR code."""
+    return await gateway.refresh_authorization(_identity(), order_id, user_id, user_email)
 
 
 @mcp_server.tool(name="thikra_get_payment_status")
 async def thikra_get_payment_status(order_id: str) -> dict[str, Any]:
     """Reconcile authorization and payment states without exposing credentials."""
     return await gateway.payment_status(_identity(), order_id)
+
+
+@mcp_server.tool(name="thikra_wait_for_payment")
+async def thikra_wait_for_payment(order_id: str, timeout_seconds: int = 90) -> dict[str, Any]:
+    """Poll Prava every three seconds and return sanitized payment status only."""
+    return await gateway.wait_for_payment(_identity(), order_id, timeout_seconds)
 
 
 @mcp_server.tool(name="thikra_start_order")

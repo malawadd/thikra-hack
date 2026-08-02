@@ -115,7 +115,10 @@ def _order_provider_selections(order: CommercialOrder) -> dict:
         selections = {}
         for slot, choice in explicit.items():
             entry = provider_catalog.resolve(slot, choice["vendor"])
-            selections[slot] = {"vendor": entry.vendor, "model": choice.get("model") or entry.default_model}
+            selections[slot] = {
+                "vendor": entry.vendor,
+                "model": choice.get("model") or entry.default_model,
+            }
         return selections
     required = set(input_payload.get("requiredProviders", []))
     forbidden = set(input_payload.get("forbiddenProviders", []))
@@ -129,7 +132,11 @@ def _order_provider_selections(order: CommercialOrder) -> dict:
     # silently diverge from the order path.
     if not required and "gmicloud" not in forbidden:
         gmi_video = next(
-            (entry for entry in provider_catalog.matrix()["video"] if entry["vendor"] == "gmicloud"),
+            (
+                entry
+                for entry in provider_catalog.matrix()["video"]
+                if entry["vendor"] == "gmicloud"
+            ),
             None,
         )
         if gmi_video:
@@ -152,12 +159,20 @@ def start_order(db: Session, auth: AuthContext, order: CommercialOrder) -> Fulfi
         and payment.gateway == "TEST_BYPASS"
         and payment.payment_state == "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
     )
+    sandbox_settlement = bool(
+        payment
+        and payment.gateway == "PRAVA"
+        and payment.environment == "SANDBOX"
+        and payment.payment_state == "SANDBOX_SETTLED_NO_REAL_FUNDS"
+    )
     if order.status != "PAID":
         if order.status != "TEST_AUTHORIZED" or not test_bypass:
             raise ValueError(
                 "Fulfillment can start only after payment is complete or local test authorization"
             )
-    elif payment is None or payment.paid_amount_minor != order.quoted_total_minor:
+    elif payment is None or (
+        not sandbox_settlement and payment.paid_amount_minor != order.quoted_total_minor
+    ):
         raise ValueError("Order does not have an exact completed payment")
     offer = db.get(ServiceOffer, order.service_offer_id)
     transition_order(db, order, "ACCEPTED", actor_type="SYSTEM", actor_id="order-service")
@@ -172,11 +187,16 @@ def start_order(db: Session, auth: AuthContext, order: CommercialOrder) -> Fulfi
     confirm_mandate(db, compiled["mandate_id"])
     payment.mandate_id = compiled["mandate_id"]
     selections = _order_provider_selections(order)
+    # The commerce executor always needs the OpenAI storyboard and a narration
+    # slot in addition to a buyer's explicit image/video choices. Restricting
+    # strategy to only the explicit keys left live MCP orders without `chat`
+    # and `tts`, even though their mandate permitted OpenAI.
+    required_slots = {"chat", "image", "video", "tts"} | set(selections)
     strategy = provider_strategy(
         db,
         compiled["mandate_id"],
         selections or None,
-        slots=set(selections) if selections else None,
+        slots=required_slots,
     )
     run = launch_run(
         db,
@@ -551,12 +571,12 @@ def _create_delivery_package(
         "service_version": order.service_version,
         "quote_id": order.quote_id,
         "payment_reference": payment.external_order_id or payment.id,
-        "payment_status": (
-            "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
-            if payment.gateway == "TEST_BYPASS"
-            else payment.payment_state
-        ),
+        "payment_status": payment.payment_state,
         "payment_amount_minor": payment.paid_amount_minor,
+        "customer_payment_collected": not (
+            payment.gateway == "TEST_BYPASS"
+            or payment.payment_state == "SANDBOX_SETTLED_NO_REAL_FUNDS"
+        ),
         "currency": order.currency,
         "mandate_id": job.mandate_id,
         "generation_run_id": run.id,

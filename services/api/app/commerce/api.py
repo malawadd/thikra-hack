@@ -38,6 +38,7 @@ from app.commerce.payments import (
     create_payment_authorization,
     reconcile_authorization,
     record_merchant_charge,
+    refresh_payment_authorization,
     serialize_commerce_payment,
 )
 from app.commerce.receipts import verify_receipt
@@ -389,6 +390,32 @@ async def payment_authorization(
         response = {"payment": serialize_commerce_payment(payment, order), "checkout": checkout}
         return _remember(
             db, auth, "payment.authorization", key, payload, "payment", payment.id, response
+        )
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.post("/orders/{order_id}/payment-authorization/refresh")
+async def refresh_payment_authorization_route(
+    order_id: str,
+    request: PaymentAuthorizationCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    auth: AuthContext = Depends(auth_context),
+    db: Session = Depends(get_db),
+):
+    key = _key(idempotency_key)
+    payload = request.model_dump(mode="json") | {"order_id": order_id}
+    cached = _cached(db, auth, "payment.authorization.refresh", key, payload)
+    if cached:
+        return cached
+    try:
+        order = _order(db, order_id)
+        payment, checkout = await refresh_payment_authorization(
+            db, auth, order, user_id=request.user_id, user_email=str(request.user_email)
+        )
+        response = {"payment": serialize_commerce_payment(payment, order), "checkout": checkout}
+        return _remember(
+            db, auth, "payment.authorization.refresh", key, payload, "payment", payment.id, response
         )
     except Exception as exc:
         raise _translate(exc) from exc

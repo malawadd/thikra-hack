@@ -18,6 +18,32 @@ from app.config import settings
 EPHEMERAL_CREDENTIALS: dict[str, list[dict]] = {}
 
 
+def validate_prava_configuration() -> None:
+    """Reject a mixed Prava environment before creating customer checkout."""
+    mode = settings.app_mode.upper()
+    if mode == "DEMO":
+        return
+    if mode not in {"SANDBOX", "PRODUCTION"}:
+        raise RuntimeError(f"Unsupported APP_MODE for Prava checkout: {mode}")
+    expected_url = (
+        "https://sandbox.api.prava.space"
+        if mode == "SANDBOX"
+        else "https://api.prava.space"
+    )
+    key_prefix = "test" if mode == "SANDBOX" else "live"
+    problems: list[str] = []
+    if settings.prava_backend_url.rstrip("/") != expected_url:
+        problems.append(f"PRAVA_BACKEND_URL must be {expected_url} in {mode}")
+    if not settings.public_web_url.startswith("https://"):
+        problems.append("PUBLIC_WEB_URL must use HTTPS for Prava checkout callbacks")
+    if not settings.prava_publishable_key.startswith(f"pk_{key_prefix}_"):
+        problems.append(f"PRAVA_PUBLISHABLE_KEY must start with pk_{key_prefix}_")
+    if not settings.prava_secret_key.startswith(f"sk_{key_prefix}_"):
+        problems.append(f"PRAVA_SECRET_KEY must start with sk_{key_prefix}_")
+    if problems:
+        raise RuntimeError("Invalid Prava configuration: " + "; ".join(problems))
+
+
 class PaymentGateway(Protocol):
     async def health(self) -> dict: ...
     async def create_authorization(self, request: dict) -> dict: ...
@@ -121,6 +147,7 @@ class PravaPaymentGateway:
         return body
 
     async def create_authorization(self, request: dict) -> dict:
+        validate_prava_configuration()
         body = self._build_session_body(request)
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(

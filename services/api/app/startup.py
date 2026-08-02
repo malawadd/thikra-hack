@@ -13,10 +13,13 @@ from app.commerce.service import seed_commerce
 from app.config import settings
 from app.thikra import initialize_database
 from app.thikra.database import SessionLocal
+from app.thikra.payments import validate_prava_configuration
 from app.thikra.service import seed_database
 
 
 def initialize_application(logger: logging.Logger) -> None:
+    if settings.app_mode.upper() in {"SANDBOX", "PRODUCTION"}:
+        validate_prava_configuration()
     if settings.app_mode.upper() == "PRODUCTION":
         required = {
             "SESSION_SECRET": settings.session_secret != "demo-only-change-me",

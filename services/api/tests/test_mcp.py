@@ -151,8 +151,10 @@ async def test_real_mcp_client_commercial_flow(
 ):
     async with mcp_app.router.lifespan_context(mcp_app):
         order_id, tool_names = await _create_commercial_order(mcp_environment)
-        assert len(tool_names) == 18
+        assert len(tool_names) == 20
         assert "thikra_request_quote" in tool_names
+        assert "thikra_refresh_payment_authorization" in tool_names
+        assert "thikra_wait_for_payment" in tool_names
         headers = {"Authorization": f"Bearer {DEMO_KEY}"}
         with TestClient(mcp_environment) as rest:
             authorization = rest.post(
@@ -211,3 +213,50 @@ async def test_real_mcp_client_commercial_flow(
             assert result.structured_content["order"]["status"] == "FULFILLING"
         await asyncio.sleep(0)
         assert started == [test_order_id]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_payment_returns_truthful_merchant_charge_stop(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    identity = gateway.GatewayIdentity("key", "application", "principal", ("payments:create",))
+    calls = 0
+
+    async def pending_then_authorized(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        state = "AWAITING_USER_APPROVAL" if calls == 1 else "MERCHANT_CHARGE_REQUIRED"
+        return {"payment": {"payment_state": state}, "reconciliation": {"status": "completed"}}
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(gateway, "payment_status", pending_then_authorized)
+    monkeypatch.setattr(gateway.asyncio, "sleep", no_sleep)
+    result = await gateway.wait_for_payment(identity, "order-1", timeout_seconds=6)
+    assert result["next_action"] == "MERCHANT_CHARGE_REQUIRED"
+    assert result["wait_completed"] is True
+
+
+def test_paid_mcp_start_schedules_live_fulfillment(monkeypatch: pytest.MonkeyPatch):
+    scheduled: list[str] = []
+    monkeypatch.setattr(gateway, "_schedule_live_fulfillment", scheduled.append)
+    identity = gateway.GatewayIdentity("key", "application", "principal", ("orders:create",))
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _model, _order_id):
+            return object()
+
+    monkeypatch.setattr(gateway, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(gateway, "start_order", lambda *_args: object())
+    monkeypatch.setattr(
+        gateway, "serialize_order", lambda *_args, **_kwargs: {"status": "FULFILLING"}
+    )
+    assert gateway.start_paid_order(identity, "order-1")["status"] == "FULFILLING"
+    assert scheduled == ["order-1"]

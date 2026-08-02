@@ -2,7 +2,25 @@
 
 The commercial direction is buyer → Thikra. Thikra creates a bounded Prava authorization session with Thikra as merchant and returns only iframe/public approval metadata. User approval changes authorization state, not payment state.
 
+For a commercial order Thikra uses Prava's hosted `full_checkout` session. The
+order page and agent response expose the hosted URL, amount, merchant, expiry,
+and a QR code for that same URL; they never expose the session token. A Prava
+hosted session is single-use, so the buyer must use either the desktop link or
+the phone QR scan, not both. A fresh-checkout action first revokes and audits
+the abandoned session, then creates its replacement. The phone's hosted flow
+can use its passkey after Prava completes its required checkout steps.
+
 In `SANDBOX`/`PRODUCTION`, Thikra polls Prava's documented payment-result endpoint and keeps any one-time payment credential in process memory only. The installed Prava documentation does not expose a merchant acquiring/charge API or refund API. Therefore authorization completion moves to `MERCHANT_CHARGE_REQUIRED`; payment becomes `PAID` only after a supported merchant rail reports an exact quoted charge and Thikra reports the outcome to Prava. Refund requests open redress and remain `REQUESTED_UNSUPPORTED` rather than being called refunded.
+
+Sandbox checkout requires an HTTPS `PUBLIC_WEB_URL`,
+`https://sandbox.api.prava.space`, and a matching `pk_test_`/`sk_test_` key
+pair. Startup and checkout creation fail clearly when these values are mixed.
+
+For an intentional end-to-end Sandbox test only,
+`THIKRA_SANDBOX_AUTO_SETTLE_PRAVA=true` reports Prava's successful test
+authorization as `APPROVED`, records `SANDBOX_SETTLED_NO_REAL_FUNDS`, and
+unlocks fulfillment. The signed receipt records zero customer funds collected.
+This option is never used in `PRODUCTION`.
 
 In `DEMO`, explicit confirmation creates a visibly `SIMULATED_PAID` record. No demo transaction is described as real. No raw card data, secret key, session credential, or one-time credential is persisted or logged.
 

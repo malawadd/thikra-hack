@@ -27,6 +27,7 @@ from app.commerce.payments import (
     authorize_test_fulfillment,
     create_payment_authorization,
     reconcile_authorization,
+    refresh_payment_authorization,
     serialize_commerce_payment,
 )
 from app.commerce.schemas import AgentDeclaration, PrincipalDeclaration, QuoteCreate
@@ -217,13 +218,91 @@ async def create_authorization(
         safe_checkout = {
             key: value
             for key, value in checkout.items()
-            if key in {"approval_url", "expires_at", "simulated", "publishable_key"}
+            if key
+            in {
+                "checkout_url",
+                "expires_at",
+                "amount_minor",
+                "currency",
+                "merchant",
+                "single_use",
+                "human_action_required",
+                "requires_fresh_checkout",
+                "simulated",
+            }
         }
         return {
             "payment": serialize_commerce_payment(payment, order),
             "authorization": safe_checkout,
             "next_action": "USER_APPROVAL_REQUIRED",
         }
+
+
+async def refresh_authorization(
+    identity: GatewayIdentity,
+    order_id: str,
+    user_id: str,
+    user_email: str,
+) -> dict[str, Any]:
+    """Revoke an unused single-use checkout and return one fresh hosted checkout."""
+    with SessionLocal() as db:
+        order = db.get(CommercialOrder, order_id)
+        if order is None:
+            raise LookupError("Order not found")
+        payment, checkout = await refresh_payment_authorization(
+            db,
+            identity.auth(),
+            order,
+            user_id=user_id,
+            user_email=user_email,
+        )
+        safe_checkout = {
+            key: value
+            for key, value in checkout.items()
+            if key
+            in {
+                "checkout_url",
+                "expires_at",
+                "amount_minor",
+                "currency",
+                "merchant",
+                "single_use",
+                "human_action_required",
+                "requires_fresh_checkout",
+                "simulated",
+            }
+        }
+        return {
+            "payment": serialize_commerce_payment(payment, order),
+            "authorization": safe_checkout,
+            "next_action": "USER_APPROVAL_REQUIRED",
+        }
+
+
+async def wait_for_payment(
+    identity: GatewayIdentity, order_id: str, timeout_seconds: int = 90
+) -> dict[str, Any]:
+    """Poll the persisted authorization in short intervals without retaining credentials."""
+    if not 3 <= timeout_seconds <= 90:
+        raise ValueError("timeout_seconds must be between 3 and 90")
+    attempts = max(1, timeout_seconds // 3)
+    last: dict[str, Any] | None = None
+    for attempt in range(attempts):
+        last = await payment_status(identity, order_id)
+        state = last["payment"]["payment_state"]
+        if state == "MERCHANT_CHARGE_REQUIRED":
+            return last | {"next_action": "MERCHANT_CHARGE_REQUIRED", "wait_completed": True}
+        if state in {"FAILED", "EXPIRED"}:
+            return last | {"next_action": "PAYMENT_FAILED", "wait_completed": True}
+        if state == "PAID":
+            return last | {"next_action": "START_FULFILLMENT", "wait_completed": True}
+        if attempt < attempts - 1:
+            await asyncio.sleep(3)
+    return (last or {}) | {
+        "next_action": "PAYMENT_STILL_PENDING",
+        "wait_completed": False,
+        "human_action_required": "The person must finish the secure Prava checkout before fulfillment can continue.",
+    }
 
 
 async def payment_status(identity: GatewayIdentity, order_id: str) -> dict[str, Any]:
@@ -244,7 +323,9 @@ def start_paid_order(identity: GatewayIdentity, order_id: str) -> dict[str, Any]
         if order is None:
             raise LookupError("Order not found")
         start_order(db, identity.auth(), order)
-        return serialize_order(db, order, detail=True)
+        response = serialize_order(db, order, detail=True)
+    _schedule_live_fulfillment(order_id)
+    return response
 
 
 async def start_test_fulfillment(identity: GatewayIdentity, order_id: str) -> dict[str, Any]:

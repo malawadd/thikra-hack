@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # SANDBOX API host; the commerce service enforces that boundary too.
     thikra_agent_test_fulfillment_enabled: bool = False
     thikra_agent_test_max_quote_minor: int = 500
+    # Sandbox-only settlement records a successful Prava test authorization as
+    # zero-funds test payment. It is never available in production.
+    thikra_sandbox_auto_settle_prava: bool = False
     thikra_default_currency: str = "USD"
     thikra_platform_margin_bps: int = 1200
     thikra_storage_fee_minor: int = 20

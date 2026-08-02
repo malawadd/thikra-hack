@@ -2,9 +2,29 @@
 
 Thikra mounts authenticated MCP Streamable HTTP at `/mcp/` using the maintained Python MCP server. The parent FastAPI lifespan starts and stops the MCP session manager.
 
-The 18 tools are: `thikra_list_services`, `thikra_get_service`, `thikra_request_quote`, `thikra_get_quote`, `thikra_accept_quote`, `thikra_create_order`, `thikra_get_order`, `thikra_create_payment_authorization`, `thikra_get_payment_status`, `thikra_start_order`, `thikra_start_test_fulfillment`, `thikra_get_order_status`, `thikra_get_order_events`, `thikra_get_deliverables`, `thikra_get_delivery_receipt`, `thikra_request_retry`, `thikra_open_dispute`, and `thikra_get_dispute`.
+The 20 tools are: `thikra_list_services`, `thikra_get_service`, `thikra_request_quote`, `thikra_get_quote`, `thikra_accept_quote`, `thikra_create_order`, `thikra_get_order`, `thikra_create_payment_authorization`, `thikra_refresh_payment_authorization`, `thikra_get_payment_status`, `thikra_wait_for_payment`, `thikra_start_order`, `thikra_start_test_fulfillment`, `thikra_get_order_status`, `thikra_get_order_events`, `thikra_get_deliverables`, `thikra_get_delivery_receipt`, `thikra_request_retry`, `thikra_open_dispute`, and `thikra_get_dispute`.
 
 MCP imports only the shared Agent Gateway facade. Transport authentication uses the same scoped API keys as REST. Payment credentials, B2 credentials, private reasoning, and permanent asset URLs are never tool output. `tests/test_mcp.py` negotiates and calls the server through the official MCP client over Streamable HTTP.
+
+## Prava Sandbox checkout from an agent
+
+For a paid order, an agent creates the quote and order, calls
+`thikra_create_payment_authorization`, presents the returned `checkout_url` as
+a clickable link **and** a QR code encoding that exact URL, and then calls
+`thikra_wait_for_payment`. The
+checkout is single-use: open the desktop link **or** scan the same URL on a
+phone, never both. The phone flow can use its passkey.
+
+If the link was opened, expired, or needs to move to another device, call
+`thikra_refresh_payment_authorization`. It revokes the abandoned session before
+returning exactly one fresh hosted URL, which an agent can show as both the
+clickable link and QR code.
+
+The wait tool polls every three seconds and returns sanitized status only. A
+completed Sandbox authorization deliberately ends at
+`MERCHANT_CHARGE_REQUIRED`: it does not claim money moved and it does not
+launch provider work. `thikra_start_order` remains blocked until an exact,
+documented merchant charge is recorded and reported to Prava.
 
 ## Use locally from Codex Desktop
 
