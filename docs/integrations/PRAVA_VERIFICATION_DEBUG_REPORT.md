@@ -19,6 +19,24 @@ card-collection surface loads. After card submission, the hosted flow displays:
 The passkey prompt is never shown. The latest payment-result poll remains pending
 because hosted verification has not completed.
 
+### Retest update after the client corrections
+
+After separating hosted and embedded sessions and correcting the merchant
+identity, fresh session creation was retested directly against Prava. On this
+retest the sandbox returned `500 INTERNAL_ERROR` for all of these request shapes:
+
+- the old request shape without `integration_type`, using the old placeholder
+  URL and `US`;
+- explicit `embedding` with the old identity;
+- explicit `embedding` with the public URL and `US`; and
+- explicit `embedding` with the public URL and `SA`.
+
+No probe returned a session, so no session link was left active. Because the old
+control request now fails identically, this current 500 is not isolated to the
+merchant URL, country, or integration-type corrections. Prava should inspect
+the merchant's sandbox configuration and response traces before passkey testing
+continues.
+
 During reproduction, the browser console also showed this message from a script
 served by `sandbox.collect.prava.space`:
 
@@ -29,8 +47,8 @@ served by `sandbox.collect.prava.space`:
 This places the observed failure after our backend has created the Prava session
 and after Prava's iframe has mounted, but before Prava/Visa's secure verification
 session becomes ready. We are not claiming that the upstream service is the only
-possible cause: the domain allowlist and two request-shape differences listed
-under **Items requiring confirmation** should be checked first.
+possible cause. The integration corrections described below were applied after
+the observation and the flow now needs to be reproduced with a fresh session.
 
 ## Environment
 
@@ -44,6 +62,9 @@ under **Items requiring confirmation** should be checked first.
 | Prava API | `https://sandbox.api.prava.space` |
 | Prava collection origin | `https://sandbox.collect.prava.space` |
 | Public frontend origin | `https://thikratest.mukaeb.com` |
+| Merchant URL sent by the diagnostic | `https://thikratest.mukaeb.com` |
+| Merchant country sent to Prava | `SA` |
+| Test user email | Tester-controlled `@gmail.com` address from `PRAVA_TEST_USER_EMAIL` (redacted) |
 | Public transport | HTTPS tunnel to the local SvelteKit server |
 | Publishable key | Configured; prefix `pk_test_` (full value redacted) |
 | Secret key | Configured server-side; prefix `sk_test_` (full value redacted) |
@@ -68,7 +89,7 @@ sequenceDiagram
     participant C as sandbox.collect.prava.space
     participant V as Hosted Visa verification
 
-    B->>W: POST /api/thikra/prava-test/session
+    B->>W: POST /api/thikra/prava-test/session?integration_type=embedding
     W->>A: POST /thikra/prava-test/session
     A->>P: POST /v1/sessions with sk_test Bearer token
     P-->>A: 201 session_id, session_token, iframe_url
@@ -96,15 +117,16 @@ amount = f"{request['maximum_amount_minor'] / 100:.2f}"
 body = {
     "user_id": request["user_id"],
     "user_email": request["user_email"],
-    "total_amount": amount,
-    "currency": request["currency"],
+            "total_amount": amount,
+            "currency": request["currency"],
+            "integration_type": request.get("integration_type", "embedding"),
     "external_order_ref": request["idempotency_key"],
     "description": f"Scoped creative procurement for mandate {request['mandate_id']}",
     "purchase_context": [{
         "merchant_details": {
             "name": request["merchant"],
             "url": request["merchant_url"],
-            "country_code_iso2": "US",
+            "country_code_iso2": settings.thikra_merchant_country_code.upper(),
             "category_code": "7399",
             "category": "Business services",
         },
@@ -137,14 +159,15 @@ For the isolated diagnostic, FastAPI calls that gateway with this logical input:
 {
   "mandate_id": "prava-zero-dollar-diagnostic",
   "merchant": "Thikra Prava sandbox verification",
-  "merchant_url": "https://thikra.example",
+  "merchant_url": "https://thikratest.mukaeb.com",
+  "integration_type": "embedding",
   "maximum_amount_minor": 0,
   "estimated_amount_minor": 0,
   "retry_reserve_minor": 0,
   "verification_only": true,
   "currency": "USD",
   "user_id": "thikra-prava-test-user",
-  "user_email": "prava.test@thikra.demo",
+  "user_email": "<tester-controlled address>@gmail.com",
   "idempotency_key": "prava-zero-test-<random UUID>"
 }
 ```
@@ -162,6 +185,7 @@ frontend are limited to:
   "order_id": "<redacted>",
   "expires_at": "<redacted>",
   "publishable_key": "pk_test_<redacted>",
+  "integration_type": "embedding",
   "amount": "0.00",
   "currency": "USD"
 }
@@ -251,6 +275,20 @@ This fixed the earlier Thikra-side error `Cross-origin state changes are not
 accepted.` It is separate from Prava's allowed-domain validation and separate
 from the current hosted `Verification Unavailable` error.
 
+## Embedded and hosted session isolation
+
+Prava session links are single-use. Once `collectPAN()` mounts a returned URL in
+the page, opening that same URL in a second tab returns **Session Already Used**.
+The diagnostic therefore no longer shares one link between the two surfaces:
+
+- **Start embedded $0 test** requests `integration_type=embedding`, mounts that
+  session once, and polls its `session_id`.
+- **Open hosted $0 test** or **Open fresh hosted flow** revokes the current
+  diagnostic session, requests `integration_type=full_checkout`, opens the fresh
+  URL without mounting it, and polls the new `session_id`.
+
+This ensures the iframe and hosted flow never compete for the same session.
+
 ## Observed stage matrix
 
 | Stage | Result |
@@ -260,7 +298,7 @@ from the current hosted `Verification Unavailable` error.
 | Thikra FastAPI diagnostic | Ready, no configuration issues |
 | `GET https://sandbox.api.prava.space/health` | Works (`status: ok`) |
 | Sandbox key-prefix pairing | Works (`pk_test_` + `sk_test_`) |
-| `POST /v1/sessions` | Works (HTTP 201) |
+| `POST /v1/sessions` | Historically HTTP 201; current retest returns Prava `500 INTERNAL_ERROR` for old and corrected request shapes |
 | Session token and iframe URL returned | Works |
 | Prava SDK iframe mount | Works |
 | Hosted address/card form | Visible |
@@ -284,31 +322,17 @@ Prava's documentation says both the SDK iframe and session middleware validate
 the originating domain. We cannot verify the dashboard allowlist from the
 application source. This is the highest-priority configuration check.
 
-### 2. The request currently omits `integration_type: "embedding"`
+### 2. Corrected: explicit integration type
 
-The current Prava documentation says `integration_type` defaults to
-`full_checkout`, while `embedding` is the value for an iframe mounted through
-the SDK. Thikra currently omits this field but still mounts the returned URL
-with `collectPAN()`.
+Thikra now sends `integration_type: "embedding"` for SDK-mounted sessions and
+`integration_type: "full_checkout"` for newly created hosted sessions. The
+hosted button never reuses the active iframe session.
 
-Please confirm whether this mismatch can let the form load while preventing the
-secure verification/FIDO stage from initializing. We can add
-`"integration_type": "embedding"` once Prava confirms the expected behavior.
-The direct **Open hosted flow** fallback uses the same session, so please also
-confirm whether a separate `full_checkout` session should be created for that
-fallback.
+### 3. Corrected: merchant URL and country
 
-### 3. The diagnostic merchant URL is a placeholder
-
-The diagnostic currently resolves `THIKRA_MERCHANT_URL` to the application
-default `https://thikra.example`; its purchase-context country is hardcoded as
-`US`. The actual public app is `https://thikratest.mukaeb.com`, and the project
-configuration's intended merchant country is `SA`.
-
-Prava's create-session documentation says the merchant URL is forwarded to
-Visa and should identify the destination merchant. Please confirm whether the
-placeholder URL or country mismatch can cause the observed Visa readiness
-failure even though session creation returns 201.
+The diagnostic now sends `https://thikratest.mukaeb.com` as the merchant URL
+and `SA` as `country_code_iso2`. An explicitly configured
+`THIKRA_MERCHANT_URL` still takes precedence for non-diagnostic deployments.
 
 ### 4. Is a standard `$0.00` sandbox checkout supported?
 
@@ -349,8 +373,9 @@ secret key, session token, raw card data, or issued one-time credentials.
    Safari, Firefox, or Edge browser with WebAuthn enabled.
 2. Confirm the page reports server configuration ready, sandbox health `ok`, a
    secure context, and WebAuthn support.
-3. Select **Start $0 Prava test**. A new session is created; old sessions are
-   revoked when the test is reset.
+3. Select **Start embedded $0 test** or **Open hosted $0 test**. Each path
+   creates a session with the matching Prava integration type; old sessions are
+   revoked when switching paths.
 4. Complete the hosted shipping fields and use one of Prava's documented Visa
    sandbox cards.
 5. Accept the terms and select **Pay Now**.
@@ -359,9 +384,8 @@ secret key, session token, raw card data, or issued one-time credentials.
    result advances toward `awaiting_result`.
 8. Actual: the hosted surface reports **Verification Unavailable** and no
    passkey prompt appears.
-9. Repeat once using **Open hosted flow** to remove iframe and extension
-   variables while keeping the same session, and record whether the failure is
-   identical.
+9. Repeat once using **Open fresh hosted flow**. This creates and polls a new
+   `full_checkout` session because the iframe session cannot be reused.
 
 The sandbox card values and OTP above come from Prava's official
 [Test Cards](https://docs.prava.space/api-reference/test-cards) reference.

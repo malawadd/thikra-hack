@@ -7,6 +7,7 @@ import json
 import time
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -471,6 +472,11 @@ async def prava_webhook_unavailable(_request: Request):
     )
 
 
+def _prava_test_email_configured() -> bool:
+    test_email = settings.prava_test_user_email.strip().lower()
+    return test_email.endswith("@gmail.com") and test_email != "@gmail.com"
+
+
 def _prava_test_configuration_issues() -> list[str]:
     issues = []
     if settings.app_mode.upper() != "SANDBOX":
@@ -481,6 +487,8 @@ def _prava_test_configuration_issues() -> list[str]:
         issues.append("PRAVA_PUBLISHABLE_KEY must be a sandbox pk_test_ key")
     if settings.prava_backend_url.rstrip("/") != "https://sandbox.api.prava.space":
         issues.append("PRAVA_BACKEND_URL must target https://sandbox.api.prava.space")
+    if not _prava_test_email_configured():
+        issues.append("PRAVA_TEST_USER_EMAIL must be a tester-controlled Gmail address")
     return issues
 
 
@@ -508,6 +516,9 @@ async def get_prava_test_diagnostics():
     return {
         "mode": settings.app_mode.upper(),
         "backend_url": settings.prava_backend_url,
+        "merchant_url": settings.thikra_merchant_url or settings.public_web_url,
+        "merchant_country_code": settings.thikra_merchant_country_code.upper(),
+        "test_user_email_configured": _prava_test_email_configured(),
         "secret_key_configured": bool(settings.prava_secret_key),
         "publishable_key_configured": bool(settings.prava_publishable_key),
         "environment_matches_keys": not _prava_test_configuration_issues(),
@@ -519,7 +530,9 @@ async def get_prava_test_diagnostics():
 
 
 @router.post("/thikra/prava-test/session", status_code=201)
-async def create_prava_test_session():
+async def create_prava_test_session(
+    integration_type: Literal["embedding", "full_checkout"] = "embedding",
+):
     issues = _prava_test_configuration_issues()
     if issues:
         raise HTTPException(
@@ -529,14 +542,15 @@ async def create_prava_test_session():
     request = {
         "mandate_id": "prava-zero-dollar-diagnostic",
         "merchant": "Thikra Prava sandbox verification",
-        "merchant_url": settings.thikra_merchant_url,
+        "merchant_url": settings.thikra_merchant_url or settings.public_web_url,
+        "integration_type": integration_type,
         "maximum_amount_minor": 0,
         "estimated_amount_minor": 0,
         "retry_reserve_minor": 0,
         "verification_only": True,
         "currency": "USD",
         "user_id": "thikra-prava-test-user",
-        "user_email": "prava.test@thikra.demo",
+        "user_email": settings.prava_test_user_email.strip(),
         "idempotency_key": f"prava-zero-test-{uuid.uuid4()}",
     }
     try:
@@ -553,6 +567,7 @@ async def create_prava_test_session():
         "order_id": result.get("order_id"),
         "expires_at": result["expires_at"],
         "publishable_key": settings.prava_publishable_key,
+        "integration_type": integration_type,
         "amount": "0.00",
         "currency": "USD",
     }

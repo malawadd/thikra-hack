@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     thikra_storage_fee_minor: int = 20
     thikra_verification_fee_minor: int = 75
     thikra_merchant_name: str = "Thikra Creative Services"
-    thikra_merchant_url: str = "https://thikra.example"
+    # Blank means the current PUBLIC_WEB_URL is the Thikra merchant URL.
+    thikra_merchant_url: str = ""
     thikra_merchant_country_code: str = "SA"
     thikra_webhook_development_allowlist: str = ""
 
@@ -49,6 +50,7 @@ class Settings(BaseSettings):
     prava_backend_url: str = "https://sandbox.api.prava.space"
     prava_publishable_key: str = ""
     prava_secret_key: str = ""
+    prava_test_user_email: str = ""
 
     # --- Backblaze B2 (parent-standard names; do not rename) ---
     # No `b2_endpoint`: `S3StorageBackend.for_backblaze()` derives the endpoint

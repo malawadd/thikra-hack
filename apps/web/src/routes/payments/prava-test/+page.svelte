@@ -12,6 +12,9 @@
   type Diagnostics = {
     mode: string;
     backend_url: string;
+    merchant_url: string;
+    merchant_country_code: string;
+    test_user_email_configured: boolean;
     secret_key_configured: boolean;
     publishable_key_configured: boolean;
     environment_matches_keys: boolean;
@@ -27,6 +30,7 @@
     order_id: string | null;
     expires_at: string;
     publishable_key: string;
+    integration_type: 'embedding' | 'full_checkout';
     amount: string;
     currency: string;
   };
@@ -42,6 +46,7 @@
   let result = $state<PollResult | null>(null);
   let loading = $state(true);
   let starting = $state(false);
+  let openingHosted = $state(false);
   let polling = $state(false);
   let error = $state('');
   let cardComplete = $state(false);
@@ -99,6 +104,13 @@
     pollTimer = window.setInterval(() => void pollSession(), 3000);
   }
 
+  async function createSession(integrationType: TestSession['integration_type']) {
+    return api<TestSession>(`/thikra/prava-test/session?integration_type=${integrationType}`, {
+      method: 'POST',
+      body: '{}'
+    });
+  }
+
   async function startSession() {
     starting = true;
     error = '';
@@ -108,7 +120,7 @@
     lastLoggedStatus = '';
     stopPolling();
     try {
-      session = await api<TestSession>('/thikra/prava-test/session', { method: 'POST', body: '{}' });
+      session = await createSession('embedding');
       addLog('Session created', `${session.session_id} · expires ${shortDate(session.expires_at)}`);
       beginPolling();
     } catch (cause) {
@@ -142,6 +154,33 @@
     await startSession();
   }
 
+  async function openFreshHostedFlow() {
+    const hostedWindow = window.open('about:blank', '_blank');
+    if (!hostedWindow) {
+      error = 'The browser blocked the hosted Prava tab. Allow pop-ups for this site and try again.';
+      addLog('Hosted flow blocked', error);
+      return;
+    }
+    hostedWindow.opener = null;
+    hostedWindow.document.title = 'Opening fresh Prava session…';
+    hostedWindow.document.body.textContent = 'Creating a fresh single-use Prava session…';
+    openingHosted = true;
+    error = '';
+    try {
+      await resetSession();
+      session = await createSession('full_checkout');
+      addLog('Hosted session created', `${session.session_id} · fresh link opened in a new tab`);
+      hostedWindow.location.replace(session.iframe_url);
+      beginPolling();
+    } catch (cause) {
+      hostedWindow.close();
+      error = cause instanceof Error ? cause.message : String(cause);
+      addLog('Hosted session error', error);
+    } finally {
+      openingHosted = false;
+    }
+  }
+
   onMount(() => {
     browser.secureContext = window.isSecureContext;
     browser.passkeyApi = 'PublicKeyCredential' in window;
@@ -167,6 +206,8 @@
     <div class="check-list">
       <div class="check" data-status={diagnostics?.environment_matches_keys ? 'PASS' : 'FAIL'}><div class="icon">{diagnostics?.environment_matches_keys ? '✓' : '!'}</div><div><h3>Sandbox keys match URL</h3><p>Test keys must target the sandbox API.</p></div></div>
       <div class="check" data-status={diagnostics?.health?.status === 'ok' ? 'PASS' : 'WARNING'}><div class="icon">{diagnostics?.health?.status === 'ok' ? '✓' : '○'}</div><div><h3>Prava API health</h3><p>{diagnostics?.health?.status ?? diagnostics?.health_error ?? 'Checking…'}</p></div></div>
+      <div class="check" data-status="PASS"><div class="icon">✓</div><div><h3>Merchant identity</h3><p>{diagnostics?.merchant_url ?? 'Checking…'} · {diagnostics?.merchant_country_code ?? '—'}</p></div></div>
+      <div class="check" data-status={diagnostics?.test_user_email_configured ? 'PASS' : 'FAIL'}><div class="icon">{diagnostics?.test_user_email_configured ? '✓' : '!'}</div><div><h3>Gmail test identity</h3><p>{diagnostics?.test_user_email_configured ? 'Tester-controlled Gmail configured' : 'Set PRAVA_TEST_USER_EMAIL'}</p></div></div>
     </div>
   </article>
   <article class="card card-pad">
@@ -198,35 +239,45 @@
     <span class="badge" data-tone="warning">$0.00 USD · sandbox only</span>
     <h2 style="margin:16px 0 7px">Card enrollment and passkey diagnostic</h2>
     <p class="lede" style="margin:0 auto 22px">This creates no provider-spend authorization and cannot launch a generation run.</p>
-    <button class="btn btn-primary" onclick={startSession} disabled={starting || !diagnostics?.ready}>{starting ? 'Creating Prava session…' : 'Start $0 Prava test'}</button>
+    <div class="actions" style="justify-content:center">
+      <button class="btn btn-primary" onclick={startSession} disabled={starting || openingHosted || !diagnostics?.ready}>{starting ? 'Creating Prava session…' : 'Start embedded $0 test'}</button>
+      <button class="btn btn-secondary" onclick={openFreshHostedFlow} disabled={starting || openingHosted || !diagnostics?.ready}>{openingHosted ? 'Opening hosted session…' : 'Open hosted $0 test'} <ExternalLink size={15} /></button>
+    </div>
     {#if diagnostics?.issues.length}<div class="error-box" style="margin-top:18px;padding:18px">{diagnostics.issues.join(' · ')}</div>{/if}
   </section>
 {:else}
   <div class="split-layout">
     <section>
       <div class="card card-pad" style="margin-bottom:18px">
-        <div class="card-head-inline"><div><strong>Sandbox session</strong><div class="mono muted" style="margin-top:5px">{session.session_id}</div></div><StatusBadge status={result?.status ?? 'PENDING'} /></div>
+        <div class="card-head-inline"><div><strong>{session.integration_type === 'embedding' ? 'Embedded' : 'Hosted'} sandbox session</strong><div class="mono muted" style="margin-top:5px">{session.session_id}</div></div><StatusBadge status={result?.status ?? 'PENDING'} /></div>
         <div class="actions" style="margin-top:16px">
-          <a class="btn btn-secondary" href={session.iframe_url} target="_blank" rel="noreferrer">Open hosted flow <ExternalLink size={15} /></a>
+          <button class="btn btn-secondary" onclick={openFreshHostedFlow} disabled={openingHosted}>{openingHosted ? 'Creating fresh session…' : 'Open fresh hosted flow'} <ExternalLink size={15} /></button>
           <button class="btn btn-secondary" onclick={pollSession} disabled={polling}><RefreshCw size={15} /> {polling ? 'Checking…' : 'Check now'}</button>
           <button class="btn btn-danger" onclick={resetSession}>End test</button>
         </div>
-        <p class="help">If the embedded flow never reaches the passkey screen, use “Open hosted flow.” It keeps the same session while removing cross-origin iframe and browser-extension variables.</p>
+        <p class="help">Prava sessions are single-use. Opening the hosted flow revokes the current embedded session, creates a fresh <code>full_checkout</code> session, and polls that new session instead of reusing an iframe-active link.</p>
         <p class="help"><strong>The passkey prompt is not the first screen.</strong> Prava shows it only after its required address/card fields, terms checkbox, Pay Now submission, and—on a new device—the OTP step.</p>
       </div>
-      <PravaCardForm
-        session={session}
-        publishableKey={session.publishable_key}
-        onready={() => { iframeReady = true; addLog('Iframe ready', 'Prava secure card form mounted'); }}
-        onchange={(state) => { if (state?.isComplete && !cardComplete) { cardComplete = true; addLog('Card fields valid', 'Waiting for hosted OTP/passkey flow'); } }}
-        onsuccess={() => { addLog('SDK success', 'Prava reported successful card collection'); void pollSession(); }}
-        onerror={(message) => { error = message; addLog('SDK error', message); }}
-        onnewsession={requestFreshSession}
-      />
+      {#if session.integration_type === 'embedding'}
+        <PravaCardForm
+          session={session}
+          publishableKey={session.publishable_key}
+          onready={() => { iframeReady = true; addLog('Iframe ready', 'Prava secure card form mounted'); }}
+          onchange={(state) => { if (state?.isComplete && !cardComplete) { cardComplete = true; addLog('Card fields valid', 'Waiting for hosted OTP/passkey flow'); } }}
+          onsuccess={() => { addLog('SDK success', 'Prava reported successful card collection'); void pollSession(); }}
+          onerror={(message) => { error = message; addLog('SDK error', message); }}
+          onnewsession={requestFreshSession}
+        />
+      {:else}
+        <div class="card card-pad">
+          <strong>Hosted flow opened in a separate tab</strong>
+          <p class="help">Complete Prava verification in that tab. This page is polling the fresh hosted session shown above. If the tab was closed or the link was consumed, select <strong>Open fresh hosted flow</strong> to create another session.</p>
+        </div>
+      {/if}
     </section>
     <aside class="sticky-panel">
       <section class="card card-pad">
-        <div class="card-head-inline"><strong>Live observations</strong><span class="badge" data-tone={iframeReady ? 'success' : 'info'}>{iframeReady ? 'Iframe ready' : 'Mounting'}</span></div>
+        <div class="card-head-inline"><strong>Live observations</strong><span class="badge" data-tone={session.integration_type === 'full_checkout' || iframeReady ? 'success' : 'info'}>{session.integration_type === 'full_checkout' ? 'Hosted tab' : iframeReady ? 'Iframe ready' : 'Mounting'}</span></div>
         <div class="timeline" style="margin-top:14px">
           {#each logs as entry}
             <div class="timeline-item"><div class="timeline-dot"></div><div><h3>{entry.event}</h3><p>{entry.time} · {entry.detail}</p></div></div>

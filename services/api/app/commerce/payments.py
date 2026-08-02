@@ -72,7 +72,8 @@ async def create_payment_authorization(
         "user_id": user_id,
         "user_email": user_email,
         "merchant": settings.thikra_merchant_name,
-        "merchant_url": settings.thikra_merchant_url,
+        "merchant_url": settings.thikra_merchant_url or settings.public_web_url,
+        "integration_type": "full_checkout",
         "idempotency_key": f"commerce-payment-{order.id}",
     }
     result = await gateway().create_authorization(request)

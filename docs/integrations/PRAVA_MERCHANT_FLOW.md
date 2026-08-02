@@ -11,7 +11,17 @@ In `DEMO`, explicit confirmation creates a visibly `SIMULATED_PAID` record. No d
 With `APP_MODE=SANDBOX` and matching `pk_test_` / `sk_test_` credentials, open
 `/payments/prava-test`. The page creates one isolated `$0.00` session with a stable test user,
 mounts the official Prava iframe, polls the same `session_id` every three seconds, and provides a
-hosted-page fallback. It cannot authorize provider spend or launch a generation run.
+hosted-page alternative. It cannot authorize provider spend or launch a generation run.
+
+Set `PRAVA_TEST_USER_EMAIL` to a real `@gmail.com` inbox controlled by the tester. The diagnostic
+refuses to create a session when that setting is missing or uses an unrecognized test domain; the
+address remains server-side configuration and is not displayed by the page.
+
+Prava session links are single-use. Mounting a link in the SDK iframe activates it, so that same
+link cannot then be opened in another tab. The embedded test creates a session with
+`integration_type: "embedding"`. Selecting **Open fresh hosted flow** revokes the current embedded
+session, creates a separate `integration_type: "full_checkout"` session, opens its unused URL, and
+switches polling to the new `session_id`.
 
 The page checks the sandbox URL/key pairing, Prava health, browser secure-context status,
 WebAuthn availability, platform-authenticator availability, iframe readiness, card validation,
@@ -23,6 +33,11 @@ displayed, so Thikra reports only events it can actually observe.
 
 One-time network tokens and dynamic CVVs are removed by FastAPI before the diagnostic result is
 returned. The diagnostic does not persist them or show them in the browser.
+
+The diagnostic identifies Thikra to Prava with `PUBLIC_WEB_URL` when no explicit
+`THIKRA_MERCHANT_URL` is configured, and sends `THIKRA_MERCHANT_COUNTRY_CODE` (`SA` by default).
+This prevents the public tunnel from being paired with the old placeholder merchant URL or a
+hardcoded US country code.
 
 Local API startup runs `alembic upgrade head` before Uvicorn. This preserves existing payment and
 run records while applying additive schema changes; `Base.metadata.create_all()` alone does not

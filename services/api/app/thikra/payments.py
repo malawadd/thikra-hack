@@ -82,13 +82,14 @@ class PravaPaymentGateway:
         self._require_success(response)
         return response.json()
 
-    async def create_authorization(self, request: dict) -> dict:
+    def _build_session_body(self, request: dict) -> dict:
         amount = f"{request['maximum_amount_minor'] / 100:.2f}"
         body = {
             "user_id": request["user_id"],
             "user_email": request["user_email"],
             "total_amount": amount,
             "currency": request["currency"],
+            "integration_type": request.get("integration_type", "embedding"),
             "external_order_ref": request["idempotency_key"],
             "description": f"Scoped creative procurement for mandate {request['mandate_id']}",
             "purchase_context": [
@@ -96,7 +97,7 @@ class PravaPaymentGateway:
                     "merchant_details": {
                         "name": request["merchant"],
                         "url": request["merchant_url"],
-                        "country_code_iso2": "US",
+                        "country_code_iso2": settings.thikra_merchant_country_code.upper(),
                         "category_code": "7399",
                         "category": "Business services",
                     },
@@ -117,6 +118,10 @@ class PravaPaymentGateway:
         callback_url = f"{settings.public_web_url}/payments"
         if callback_url.startswith("https://"):
             body["callback_url"] = callback_url
+        return body
+
+    async def create_authorization(self, request: dict) -> dict:
+        body = self._build_session_body(request)
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
                 f"{settings.prava_backend_url}/v1/sessions",

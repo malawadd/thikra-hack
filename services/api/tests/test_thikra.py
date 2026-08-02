@@ -21,7 +21,7 @@ from app.thikra.api import router
 from app.thikra.audit import append_event, verify_chain
 from app.thikra.database import Base, get_db
 from app.thikra.models import AuditEvent, GenerationRun, Mandate, MandateVersion
-from app.thikra.payments import sanitize_payment_result
+from app.thikra.payments import PravaPaymentGateway, sanitize_payment_result
 from app.thikra.schemas import BriefCreate, CreativeMandate
 from app.thikra.service import (
     compile_brief,
@@ -244,11 +244,12 @@ def test_prava_zero_dollar_diagnostics_never_expose_credentials(
 
         async def create_authorization(self, request: dict) -> dict:
             self.created.append(request)
+            suffix = len(self.created)
             return {
-                "session_id": "sess_diagnostic_1",
-                "session_token": "sandbox-session-token",
-                "iframe_url": "https://sandbox.collect.prava.space/session/diagnostic",
-                "order_id": "ord_diagnostic_1",
+                "session_id": f"sess_diagnostic_{suffix}",
+                "session_token": f"sandbox-session-token-{suffix}",
+                "iframe_url": f"https://sandbox.collect.prava.space/session/diagnostic-{suffix}",
+                "order_id": f"ord_diagnostic_{suffix}",
                 "expires_at": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
             }
 
@@ -280,16 +281,34 @@ def test_prava_zero_dollar_diagnostics_never_expose_credentials(
     monkeypatch.setattr(settings, "prava_backend_url", "https://sandbox.api.prava.space")
     monkeypatch.setattr(settings, "prava_secret_key", "sk_test_server_only")
     monkeypatch.setattr(settings, "prava_publishable_key", "pk_test_browser_safe")
+    monkeypatch.setattr(settings, "prava_test_user_email", "tester@gmail.com")
+    monkeypatch.setattr(settings, "public_web_url", "https://thikratest.mukaeb.com")
+    monkeypatch.setattr(settings, "thikra_merchant_url", "")
     monkeypatch.setattr(thikra_api, "gateway", lambda: fake_gateway)
 
     diagnostics = client.get("/thikra/prava-test")
     assert diagnostics.status_code == 200
     assert diagnostics.json()["ready"] is True
+    assert diagnostics.json()["merchant_url"] == "https://thikratest.mukaeb.com"
+    assert diagnostics.json()["merchant_country_code"] == "SA"
+    assert diagnostics.json()["test_user_email_configured"] is True
 
     created = client.post("/thikra/prava-test/session")
     assert created.status_code == 201
     assert fake_gateway.created[0]["maximum_amount_minor"] == 0
     assert fake_gateway.created[0]["verification_only"] is True
+    assert fake_gateway.created[0]["user_email"] == "tester@gmail.com"
+    assert fake_gateway.created[0]["integration_type"] == "embedding"
+    assert fake_gateway.created[0]["merchant_url"] == "https://thikratest.mukaeb.com"
+    assert created.json()["integration_type"] == "embedding"
+
+    hosted = client.post(
+        "/thikra/prava-test/session?integration_type=full_checkout"
+    )
+    assert hosted.status_code == 201
+    assert hosted.json()["integration_type"] == "full_checkout"
+    assert hosted.json()["session_id"] != created.json()["session_id"]
+    assert fake_gateway.created[1]["integration_type"] == "full_checkout"
 
     polled = client.post("/thikra/prava-test/session/sess_diagnostic_1/poll")
     assert polled.status_code == 200
@@ -300,6 +319,42 @@ def test_prava_zero_dollar_diagnostics_never_expose_credentials(
 
     revoked = client.post("/thikra/prava-test/session/sess_diagnostic_1/revoke")
     assert revoked.json() == {"success": True, "session_id": "sess_diagnostic_1"}
+
+    monkeypatch.setattr(settings, "prava_test_user_email", "tester@thikra.demo")
+    invalid_email = client.get("/thikra/prava-test")
+    assert invalid_email.json()["ready"] is False
+    assert invalid_email.json()["test_user_email_configured"] is False
+    assert "PRAVA_TEST_USER_EMAIL" in " ".join(invalid_email.json()["issues"])
+
+
+def test_prava_session_body_uses_configured_country_and_integration_type(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "public_web_url", "https://thikratest.mukaeb.com")
+    monkeypatch.setattr(settings, "thikra_merchant_country_code", "SA")
+    body = PravaPaymentGateway()._build_session_body(
+        {
+            "mandate_id": "prava-zero-dollar-diagnostic",
+            "merchant": "Thikra Prava sandbox verification",
+            "merchant_url": "https://thikratest.mukaeb.com",
+            "maximum_amount_minor": 0,
+            "currency": "USD",
+            "user_id": "thikra-prava-test-user",
+            "user_email": "tester@gmail.com",
+            "idempotency_key": "prava-zero-test-unit",
+            "integration_type": "full_checkout",
+        }
+    )
+
+    assert body["integration_type"] == "full_checkout"
+    assert body["callback_url"] == "https://thikratest.mukaeb.com/payments"
+    assert body["purchase_context"][0]["merchant_details"] == {
+        "name": "Thikra Prava sandbox verification",
+        "url": "https://thikratest.mukaeb.com",
+        "country_code_iso2": "SA",
+        "category_code": "7399",
+        "category": "Business services",
+    }
 
 
 def test_state_machine_and_retry_limits():
