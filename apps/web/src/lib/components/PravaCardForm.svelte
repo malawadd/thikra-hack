@@ -6,12 +6,18 @@
     session,
     publishableKey,
     onerror,
-    onnewsession
+    onnewsession,
+    onready,
+    onchange,
+    onsuccess
   }: {
     session: { session_token: string; iframe_url: string };
     publishableKey: string;
     onerror?: (message: string) => void;
     onnewsession?: () => void | Promise<void>;
+    onready?: () => void;
+    onchange?: (state: any) => void;
+    onsuccess?: (result: any) => void;
   } = $props();
   let container: HTMLDivElement;
   let loading = $state(true);
@@ -20,6 +26,16 @@
   let validation = $state<any>(null);
   let requestingSession = $state(false);
   let sdk: any = null;
+  let readyNotified = false;
+
+  function markReady() {
+    ready = true;
+    loading = false;
+    if (!readyNotified) {
+      readyNotified = true;
+      onready?.();
+    }
+  }
 
   function errorMessage(cause: unknown): string {
     const value = cause && typeof cause === 'object' && 'message' in cause
@@ -35,6 +51,9 @@
 
   async function mount() {
     loading = true;
+    ready = false;
+    readyNotified = false;
+    validation = null;
     error = '';
     sdk?.destroy();
     try {
@@ -44,9 +63,9 @@
         sessionToken: session.session_token,
         iframeUrl: session.iframe_url,
         container,
-        onReady: () => { ready = true; loading = false; },
-        onChange: (state: any) => validation = state,
-        onSuccess: () => {},
+        onReady: markReady,
+        onChange: (state: any) => { validation = state; onchange?.(state); },
+        onSuccess: (result: any) => onsuccess?.(result),
         onError: (cause: unknown) => { error = errorMessage(cause); loading = false; onerror?.(error); }
       });
     } catch (cause) {
@@ -66,7 +85,7 @@
   onMount(() => {
     void mount();
     const observer = new MutationObserver(() => {
-      if (container?.querySelector('iframe')) { ready = true; loading = false; }
+      if (container?.querySelector('iframe')) markReady();
     });
     observer.observe(container, { childList: true, subtree: true });
     const timeout = window.setTimeout(() => loading = false, 5000);

@@ -471,6 +471,124 @@ async def prava_webhook_unavailable(_request: Request):
     )
 
 
+def _prava_test_configuration_issues() -> list[str]:
+    issues = []
+    if settings.app_mode.upper() != "SANDBOX":
+        issues.append("APP_MODE must be SANDBOX")
+    if not settings.prava_secret_key.startswith("sk_test_"):
+        issues.append("PRAVA_SECRET_KEY must be a sandbox sk_test_ key")
+    if not settings.prava_publishable_key.startswith("pk_test_"):
+        issues.append("PRAVA_PUBLISHABLE_KEY must be a sandbox pk_test_ key")
+    if settings.prava_backend_url.rstrip("/") != "https://sandbox.api.prava.space":
+        issues.append("PRAVA_BACKEND_URL must target https://sandbox.api.prava.space")
+    return issues
+
+
+def _validate_prava_session_id(session_id: str) -> None:
+    if not session_id or len(session_id) > 180 or not all(
+        character.isalnum() or character in {"_", "-"} for character in session_id
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_PRAVA_SESSION_ID", "message": "Invalid Prava session id"},
+        )
+
+
+@router.get("/thikra/prava-test")
+async def get_prava_test_diagnostics():
+    issues = _prava_test_configuration_issues()
+    health = None
+    health_error = None
+    if not issues:
+        try:
+            health = await gateway().health()
+        except Exception as exc:
+            health_error = str(exc)
+            issues.append("The Prava sandbox health check failed")
+    return {
+        "mode": settings.app_mode.upper(),
+        "backend_url": settings.prava_backend_url,
+        "secret_key_configured": bool(settings.prava_secret_key),
+        "publishable_key_configured": bool(settings.prava_publishable_key),
+        "environment_matches_keys": not _prava_test_configuration_issues(),
+        "health": health,
+        "health_error": health_error,
+        "ready": not issues,
+        "issues": issues,
+    }
+
+
+@router.post("/thikra/prava-test/session", status_code=201)
+async def create_prava_test_session():
+    issues = _prava_test_configuration_issues()
+    if issues:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PRAVA_TEST_NOT_READY", "message": "; ".join(issues)},
+        )
+    request = {
+        "mandate_id": "prava-zero-dollar-diagnostic",
+        "merchant": "Thikra Prava sandbox verification",
+        "merchant_url": settings.thikra_merchant_url,
+        "maximum_amount_minor": 0,
+        "estimated_amount_minor": 0,
+        "retry_reserve_minor": 0,
+        "verification_only": True,
+        "currency": "USD",
+        "user_id": "thikra-prava-test-user",
+        "user_email": "prava.test@thikra.demo",
+        "idempotency_key": f"prava-zero-test-{uuid.uuid4()}",
+    }
+    try:
+        result = await gateway().create_authorization(request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "PRAVA_TEST_SESSION_FAILED", "message": str(exc)},
+        ) from exc
+    return {
+        "session_id": result["session_id"],
+        "session_token": result["session_token"],
+        "iframe_url": result["iframe_url"],
+        "order_id": result.get("order_id"),
+        "expires_at": result["expires_at"],
+        "publishable_key": settings.prava_publishable_key,
+        "amount": "0.00",
+        "currency": "USD",
+    }
+
+
+@router.post("/thikra/prava-test/session/{session_id}/poll")
+async def poll_prava_test_session(session_id: str):
+    _validate_prava_session_id(session_id)
+    try:
+        result = await gateway().get_authorization(session_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "PRAVA_TEST_POLL_FAILED", "message": str(exc)},
+        ) from exc
+    sanitized, credentials = sanitize_payment_result(result)
+    return {
+        "status": sanitized.get("status", "pending"),
+        "result": sanitized,
+        "credential_generated": bool(credentials),
+    }
+
+
+@router.post("/thikra/prava-test/session/{session_id}/revoke")
+async def revoke_prava_test_session(session_id: str):
+    _validate_prava_session_id(session_id)
+    try:
+        result = await gateway().revoke(session_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "PRAVA_TEST_REVOKE_FAILED", "message": str(exc)},
+        ) from exc
+    return {"success": bool(result.get("success")), "session_id": session_id}
+
+
 @router.get("/thikra/payments")
 def list_payments(db: Session = Depends(get_db)):
     items = list(db.scalars(select(PaymentRecord).order_by(PaymentRecord.created_at.desc())))

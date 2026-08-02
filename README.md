@@ -17,6 +17,7 @@ The responsive command center is also verified at a 390×844 mobile viewport: [m
 - Seven-step brief, mandate review/versioning, provider strategy, authorization, and launch flow.
 - Editable planned scenes that become immutable when generation starts.
 - Official Prava secure iframe integration in sandbox mode; keys and one-time credentials stay server-side.
+- Focused Prava `$0` sandbox diagnostic at `/payments/prava-test`, including passkey readiness, iframe events, polling, and a hosted-page fallback.
 - Preserved Genblaze storyboard → keyframe → video/narration/music → ffmpeg path in sandbox/production.
 - B2 media metadata, lineage, hashes, server-side short-lived downloads, and one evidence JSON adapter.
 - SSE with stable envelopes, deterministic IDs, resume cursor, deduplication, reconnect backoff, and polling fallback.
@@ -35,7 +36,12 @@ pnpm setup
 pnpm dev
 ```
 
-The same `pnpm setup` and `pnpm dev` commands work in PowerShell, cmd, macOS, and Linux because environment setup and process launch use Node scripts. Open [http://localhost:43191](http://localhost:43191). FastAPI and OpenAPI run at [http://localhost:43192/docs](http://localhost:43192/docs).
+The same `pnpm setup` and `pnpm dev` commands work in PowerShell, cmd, macOS, and Linux because environment setup and process launch use Node scripts. `pnpm dev` applies pending Alembic migrations before starting FastAPI. Open [http://localhost:43191](http://localhost:43191). FastAPI and OpenAPI run at [http://localhost:43192/docs](http://localhost:43192/docs).
+
+On Windows, stop all local Thikra web/API process trees with `pnpm stop:windows` or run
+`.\scripts\stop-app.ps1` directly from PowerShell. Use `.\scripts\stop-app.ps1 -WhatIf` to
+preview the exact PIDs without stopping anything. The script targets only listeners on ports
+43191, 43192, and 43292 plus their related Thikra launcher processes.
 
 ## Runtime modes
 
@@ -47,13 +53,14 @@ The same `pnpm setup` and `pnpm dev` commands work in PowerShell, cmd, macOS, an
 
 Copy `.env.example` and set `APP_MODE`. Real sandbox work needs `PRAVA_PUBLISHABLE_KEY`, `PRAVA_SECRET_KEY`, all four `B2_*` values, `OPENAI_API_KEY`, and at least one configured provider for each selected modality. No secret is exposed through the browser bundle or health responses.
 
-Prava's official skill currently documents session creation, secure iframe authorization, result polling, one-time credential handling, outcome reporting, and revocation. It does not document a webhook signature contract, refund API, or a card-checkout contract for the selected AI providers. Thikra returns an explicit unsupported response and opens redress instead of calling invented APIs. See [Prava integration](docs/integrations/prava.md).
+Prava's official skill currently documents session creation, secure iframe authorization, result polling, one-time credential handling, outcome reporting, and revocation. It does not document a webhook signature contract, refund API, or a card-checkout contract for the selected AI providers. Thikra returns an explicit unsupported response and opens redress instead of calling invented APIs. See the [Prava merchant flow](docs/integrations/PRAVA_MERCHANT_FLOW.md).
 
 ## Commands
 
 ```text
 pnpm setup             install frontend and API dependencies
 pnpm dev               run SvelteKit :43191 and FastAPI :43192
+pnpm stop:windows      stop local Thikra web/API processes from PowerShell
 pnpm dev:agent         run the separate external buyer agent
 pnpm demo:agent        run the isolated MCP-to-delivery demonstration
 pnpm demo:human        run the human marketplace demonstration

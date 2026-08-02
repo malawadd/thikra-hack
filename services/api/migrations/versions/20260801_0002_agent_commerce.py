@@ -27,7 +27,10 @@ def upgrade() -> None:
                 Column(
                     "commercial_order_id",
                     String(36),
-                    ForeignKey("commercial_orders.id"),
+                    ForeignKey(
+                        "commercial_orders.id",
+                        name="fk_payment_records_commercial_order_id",
+                    ),
                     nullable=True,
                 )
             )

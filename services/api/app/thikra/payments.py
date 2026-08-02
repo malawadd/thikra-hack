@@ -19,6 +19,7 @@ EPHEMERAL_CREDENTIALS: dict[str, list[dict]] = {}
 
 
 class PaymentGateway(Protocol):
+    async def health(self) -> dict: ...
     async def create_authorization(self, request: dict) -> dict: ...
     async def get_authorization(self, session_id: str) -> dict: ...
     async def report_outcome(self, session_id: str, body: dict) -> dict: ...
@@ -26,6 +27,9 @@ class PaymentGateway(Protocol):
 
 
 class DemoPaymentGateway:
+    async def health(self) -> dict:
+        return {"status": "simulated", "simulated": True}
+
     async def create_authorization(self, request: dict) -> dict:
         now = datetime.now(UTC)
         token = request["idempotency_key"].replace(" ", "-")[:32]
@@ -50,10 +54,33 @@ class DemoPaymentGateway:
 
 
 class PravaPaymentGateway:
+    @staticmethod
+    def _require_success(response: httpx.Response) -> None:
+        if response.is_success:
+            return
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        detail = payload.get("error") or payload.get("detail") or {}
+        if isinstance(detail, str):
+            message = detail
+            code = "PRAVA_UPSTREAM_ERROR"
+        else:
+            message = detail.get("message") or "Prava rejected the request"
+            code = detail.get("code") or "PRAVA_UPSTREAM_ERROR"
+        raise RuntimeError(f"Prava HTTP {response.status_code} ({code}): {message}")
+
     def _headers(self) -> dict[str, str]:
         if not settings.prava_secret_key:
             raise RuntimeError("PRAVA_SECRET_KEY is not configured")
         return {"Authorization": f"Bearer {settings.prava_secret_key}"}
+
+    async def health(self) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"{settings.prava_backend_url}/health")
+        self._require_success(response)
+        return response.json()
 
     async def create_authorization(self, request: dict) -> dict:
         amount = f"{request['maximum_amount_minor'] / 100:.2f}"
@@ -96,7 +123,7 @@ class PravaPaymentGateway:
                 headers={**self._headers(), "Content-Type": "application/json"},
                 json=body,
             )
-        response.raise_for_status()
+        self._require_success(response)
         return response.json()
 
     async def get_authorization(self, session_id: str) -> dict:
@@ -106,7 +133,7 @@ class PravaPaymentGateway:
                 headers=self._headers(),
                 params={"_t": int(datetime.now(UTC).timestamp() * 1000)},
             )
-        response.raise_for_status()
+        self._require_success(response)
         return response.json()
 
     async def report_outcome(self, session_id: str, body: dict) -> dict:
@@ -116,7 +143,7 @@ class PravaPaymentGateway:
                 headers={**self._headers(), "Content-Type": "application/json"},
                 json=body,
             )
-        response.raise_for_status()
+        self._require_success(response)
         return response.json()
 
     async def revoke(self, session_id: str) -> dict:
@@ -125,7 +152,7 @@ class PravaPaymentGateway:
                 f"{settings.prava_backend_url}/v1/sessions/{session_id}/revoke",
                 headers=self._headers(),
             )
-        response.raise_for_status()
+        self._require_success(response)
         return response.json()
 
 

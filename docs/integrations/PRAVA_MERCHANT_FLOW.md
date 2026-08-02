@@ -5,3 +5,25 @@ The commercial direction is buyer → Thikra. Thikra creates a bounded Prava aut
 In `SANDBOX`/`PRODUCTION`, Thikra polls Prava's documented payment-result endpoint and keeps any one-time payment credential in process memory only. The installed Prava documentation does not expose a merchant acquiring/charge API or refund API. Therefore authorization completion moves to `MERCHANT_CHARGE_REQUIRED`; payment becomes `PAID` only after a supported merchant rail reports an exact quoted charge and Thikra reports the outcome to Prava. Refund requests open redress and remain `REQUESTED_UNSUPPORTED` rather than being called refunded.
 
 In `DEMO`, explicit confirmation creates a visibly `SIMULATED_PAID` record. No demo transaction is described as real. No raw card data, secret key, session credential, or one-time credential is persisted or logged.
+
+## Focused sandbox diagnostic
+
+With `APP_MODE=SANDBOX` and matching `pk_test_` / `sk_test_` credentials, open
+`/payments/prava-test`. The page creates one isolated `$0.00` session with a stable test user,
+mounts the official Prava iframe, polls the same `session_id` every three seconds, and provides a
+hosted-page fallback. It cannot authorize provider spend or launch a generation run.
+
+The page checks the sandbox URL/key pairing, Prava health, browser secure-context status,
+WebAuthn availability, platform-authenticator availability, iframe readiness, card validation,
+SDK success/error events, and the sanitized payment result. On a browser/device that has not been
+bound before, complete the hosted address/card fields, accept the terms, submit Pay Now, and use
+sandbox OTP `456789`; the hosted Prava flow then owns passkey creation or verification. The
+passkey prompt is not the initial iframe screen. `@prava-sdk/core` exposes no separate event proving that the passkey prompt was
+displayed, so Thikra reports only events it can actually observe.
+
+One-time network tokens and dynamic CVVs are removed by FastAPI before the diagnostic result is
+returned. The diagnostic does not persist them or show them in the browser.
+
+Local API startup runs `alembic upgrade head` before Uvicorn. This preserves existing payment and
+run records while applying additive schema changes; `Base.metadata.create_all()` alone does not
+migrate an existing SQLite database.

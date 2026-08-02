@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import app.thikra.api as thikra_api
+from app.commerce import models as commerce_models  # noqa: F401
 from app.config import settings
 from app.thikra.api import router
 from app.thikra.audit import append_event, verify_chain
@@ -229,6 +230,76 @@ def test_zero_value_sandbox_verification_can_request_fresh_session(
     assert second.status_code == 201
     assert second.json()["external_session_id"] != first.json()["external_session_id"]
     assert fake_gateway.revoked == [first.json()["external_session_id"]]
+
+
+def test_prava_zero_dollar_diagnostics_never_expose_credentials(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    class FakePravaGateway:
+        def __init__(self):
+            self.created: list[dict] = []
+
+        async def health(self) -> dict:
+            return {"status": "ok"}
+
+        async def create_authorization(self, request: dict) -> dict:
+            self.created.append(request)
+            return {
+                "session_id": "sess_diagnostic_1",
+                "session_token": "sandbox-session-token",
+                "iframe_url": "https://sandbox.collect.prava.space/session/diagnostic",
+                "order_id": "ord_diagnostic_1",
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+            }
+
+        async def get_authorization(self, session_id: str) -> dict:
+            return {
+                "session_id": session_id,
+                "status": "completed",
+                "transactions": [
+                    {
+                        "status": "completed",
+                        "line_items": [
+                            {
+                                "txn_ref_id": "txn-diagnostic",
+                                "token": "one-time-network-token",
+                                "dynamic_cvv": "123",
+                                "expiry_month": "12",
+                                "expiry_year": "2030",
+                            }
+                        ],
+                    }
+                ],
+            }
+
+        async def revoke(self, session_id: str) -> dict:
+            return {"success": True, "session_id": session_id}
+
+    fake_gateway = FakePravaGateway()
+    monkeypatch.setattr(settings, "app_mode", "SANDBOX")
+    monkeypatch.setattr(settings, "prava_backend_url", "https://sandbox.api.prava.space")
+    monkeypatch.setattr(settings, "prava_secret_key", "sk_test_server_only")
+    monkeypatch.setattr(settings, "prava_publishable_key", "pk_test_browser_safe")
+    monkeypatch.setattr(thikra_api, "gateway", lambda: fake_gateway)
+
+    diagnostics = client.get("/thikra/prava-test")
+    assert diagnostics.status_code == 200
+    assert diagnostics.json()["ready"] is True
+
+    created = client.post("/thikra/prava-test/session")
+    assert created.status_code == 201
+    assert fake_gateway.created[0]["maximum_amount_minor"] == 0
+    assert fake_gateway.created[0]["verification_only"] is True
+
+    polled = client.post("/thikra/prava-test/session/sess_diagnostic_1/poll")
+    assert polled.status_code == 200
+    assert polled.json()["credential_generated"] is True
+    encoded = json.dumps(polled.json())
+    assert "one-time-network-token" not in encoded
+    assert "dynamic_cvv" not in encoded
+
+    revoked = client.post("/thikra/prava-test/session/sess_diagnostic_1/revoke")
+    assert revoked.json() == {"success": True, "session_id": "sess_diagnostic_1"}
 
 
 def test_state_machine_and_retry_limits():

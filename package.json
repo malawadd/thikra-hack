@@ -8,6 +8,7 @@
     "dev:web": "pnpm --filter @thikra/web dev",
     "dev:api": "node scripts/run-api.mjs",
     "dev:agent": "pnpm --filter @thikra/agent-client dev",
+    "stop:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-app.ps1",
     "demo:agent": "node scripts/demo-agent.mjs",
     "demo:human": "node scripts/demo-human.mjs",
     "seed:commerce": "node scripts/api-command.mjs python -m app.commerce.seed_cli",
