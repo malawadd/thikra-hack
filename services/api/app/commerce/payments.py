@@ -175,6 +175,12 @@ def authorize_test_fulfillment(
 
 
 def serialize_commerce_payment(payment: PaymentRecord, order: CommercialOrder) -> dict:
+    sandbox_test_settlement = (
+        payment.gateway == "PRAVA"
+        and payment.environment == "SANDBOX"
+        and payment.payment_state == "SANDBOX_SETTLED_NO_REAL_FUNDS"
+    )
+    test_bypass = payment.gateway == TEST_BYPASS_GATEWAY
     return {
         "id": payment.id,
         "order_id": order.id,
@@ -187,6 +193,16 @@ def serialize_commerce_payment(payment: PaymentRecord, order: CommercialOrder) -
         "paid_amount_minor": payment.paid_amount_minor,
         "authorization_state": payment.authorization_state,
         "payment_state": payment.payment_state,
+        # This is an explicit test-payment completion signal for agents. It
+        # permits fulfillment in SANDBOX while preserving the factual $0
+        # collection record and never exists in production.
+        "sandbox_test_settlement": sandbox_test_settlement,
+        "customer_payment_collected": payment.gateway != "DEMO"
+        and not sandbox_test_settlement
+        and payment.paid_amount_minor > 0,
+        "fulfillment_authorized": sandbox_test_settlement
+        or test_bypass
+        or payment.paid_amount_minor == order.quoted_total_minor,
         "simulated": payment.gateway == "DEMO",
         "external_session_reference": payment.external_session_id,
         "external_order_reference": payment.external_order_id,

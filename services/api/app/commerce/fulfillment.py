@@ -127,22 +127,22 @@ def _order_provider_selections(order: CommercialOrder) -> dict:
         match = next((entry for entry in entries if entry["vendor"] in required), None)
         if match:
             selections[slot] = {"vendor": match["vendor"], "model": match["default_model"]}
-    # Commerce defaults to GMI Cloud for image-to-video unless the buyer set a
-    # provider allow-list or explicitly forbade it. Studio's default must not
-    # silently diverge from the order path.
-    if not required and "gmicloud" not in forbidden:
-        gmi_video = next(
+    # Commerce uses OpenAI Sora for image-to-video by default. A buyer's
+    # allow-list or explicit provider selection still wins, and an explicit
+    # OpenAI prohibition lets the normal compliant-provider fallback apply.
+    if (not required or "openai" in required) and "openai" not in forbidden:
+        openai_video = next(
             (
                 entry
                 for entry in provider_catalog.matrix()["video"]
-                if entry["vendor"] == "gmicloud"
+                if entry["vendor"] == "openai"
             ),
             None,
         )
-        if gmi_video:
+        if openai_video:
             selections["video"] = {
-                "vendor": gmi_video["vendor"],
-                "model": gmi_video["default_model"],
+                "vendor": openai_video["vendor"],
+                "model": openai_video["default_model"],
             }
     return selections
 
@@ -303,11 +303,20 @@ async def execute_live_fulfillment(order_id: str) -> None:
                 and payment.gateway == "TEST_BYPASS"
                 and payment.payment_state == "TEST_BYPASSED_NO_CUSTOMER_PAYMENT"
             )
-            if test_bypass and not any(check.status == "FAIL" for check in checks):
-                # The explicit local test action is also the user's approval to complete
-                # a no-failure Sandbox run. Paid orders always retain human review.
+            sandbox_settlement = bool(
+                payment
+                and payment.gateway == "PRAVA"
+                and payment.environment == "SANDBOX"
+                and payment.payment_state == "SANDBOX_SETTLED_NO_REAL_FUNDS"
+            )
+            if (test_bypass or sandbox_settlement) and not any(
+                check.status == "FAIL" for check in checks
+            ):
+                # A local test bypass or a completed Prava Sandbox checkout is
+                # the principal's explicit test approval.  Both paths remain
+                # truthful in the receipt: no customer funds were collected.
                 run.status = "COMPLETED"
-                run.current_stage = "Verified local Sandbox test delivery"
+                run.current_stage = "Verified Sandbox test delivery"
                 run.accepted = True
                 for asset in db.scalars(select(DBAsset).where(DBAsset.run_id == run.id)):
                     asset.approval_state = "APPROVED"
@@ -315,9 +324,9 @@ async def execute_live_fulfillment(order_id: str) -> None:
                     db,
                     workspace_id=run.workspace_id,
                     run_id=run.id,
-                    event_type="delivery.test_auto_approved",
+                    event_type="delivery.sandbox_auto_approved",
                     actor_type="SYSTEM",
-                    actor_id="local-sandbox-test-fulfillment",
+                    actor_id="sandbox-test-fulfillment",
                     payload={
                         "customer_payment_collected": False,
                         "verification_failures": 0,
@@ -330,7 +339,7 @@ async def execute_live_fulfillment(order_id: str) -> None:
                     "READY",
                     actor_type="AGENT",
                     actor_id="verification-engine",
-                    payload={"local_sandbox_test_auto_delivery": True},
+                    payload={"sandbox_test_auto_delivery": True},
                 )
                 _create_delivery_package(db, order, job, run)
                 job.status = "COMPLETED"
@@ -344,7 +353,7 @@ async def execute_live_fulfillment(order_id: str) -> None:
                     payload={
                         "fulfillment_job_id": job.id,
                         "generation_run_id": run.id,
-                        "local_sandbox_test_auto_delivery": True,
+                        "sandbox_test_auto_delivery": True,
                     },
                 )
             else:
@@ -387,6 +396,58 @@ def retry_order(
     )
     if not failures:
         raise ValueError("No failed component requires a retry")
+    if settings.app_mode.upper() != "DEMO":
+        # A live/Sandbox retry must run the provider again.  The historical
+        # fixture below is intentionally retained only for DEMO test cases;
+        # marking a failed live component as passed would fabricate delivery
+        # evidence.
+        payment = db.get(PaymentRecord, run.payment_record_id)
+        selection = json.loads(run.provider_selection_json)
+        replacement = launch_run(
+            db,
+            job.mandate_id,
+            payment,
+            selection,
+            f"commerce-retry-{order.id}-{job.attempt_number + 1}",
+        )
+        replacement.status = "GENERATING"
+        replacement.current_stage = "Commercial order retry generation"
+        transition_order(
+            db,
+            order,
+            "FULFILLING",
+            actor_type="AGENT",
+            actor_id=order.buyer_agent_id,
+            payload={
+                "component": component,
+                "reason": reason,
+                "generation_run_id": replacement.id,
+                "live_provider_retry": True,
+            },
+        )
+        job.generation_run_id = replacement.id
+        job.status = "FULFILLING"
+        job.attempt_number += 1
+        job.started_at = datetime.now(UTC)
+        job.completed_at = None
+        job.failure_code = None
+        job.failure_message = None
+        append_event(
+            db,
+            workspace_id=replacement.workspace_id,
+            run_id=replacement.id,
+            event_type="order.live_retry_started",
+            actor_type="AGENT",
+            actor_id=order.buyer_agent_id,
+            payload={
+                "previous_generation_run_id": run.id,
+                "reason": reason,
+                "component": component,
+            },
+            related_object_ids=[order.id, job.id, run.id, replacement.id],
+        )
+        db.commit()
+        return job
     transition_order(
         db,
         order,
@@ -480,7 +541,13 @@ def _create_delivery_package(
 ) -> None:
     if db.scalar(select(DeliveryReceipt).where(DeliveryReceipt.order_id == order.id)):
         return
-    assets = list(db.scalars(select(DBAsset).where(DBAsset.run_id == run.id)))
+    # A recovered live run can retain superseded evidence for auditability.
+    # Prefer the newest verified artifacts when selecting the delivery bundle.
+    assets = list(
+        db.scalars(
+            select(DBAsset).where(DBAsset.run_id == run.id).order_by(DBAsset.created_at.desc())
+        )
+    )
     checks = list(
         db.scalars(
             select(EvaluationResult)

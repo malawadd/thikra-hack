@@ -130,10 +130,12 @@ def test_composer_line_budget() -> None:
     `subtitles` (libass) filter, burn when present else mux a soft `mov_text`
     track, falling back to no captions — so an ffmpeg built without libass no
     longer fails Stage C. Composer is the highest-risk module; this resilience
-    earns its lines.
+    earns its lines. Bumped 520 → 570 for media-type track classification:
+    concurrent B2 results must preserve completed video and distinguish speech
+    narration from optional music without relying on fixed step positions.
     """
     lines = (APP_ROOT / "repo" / "composer.py").read_text().splitlines()
-    assert len(lines) < 520, f"composer.py is {len(lines)} lines — budget is 520"
+    assert len(lines) < 570, f"composer.py is {len(lines)} lines — budget is 570"
 
 
 def test_main_line_budget() -> None:

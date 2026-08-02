@@ -123,6 +123,7 @@ def test_provider_scores_and_budget_arithmetic(db: Session):
     confirm_mandate(db, compiled["mandate_id"])
     strategy = provider_strategy(db, compiled["mandate_id"])
     assert set(strategy["selection"]) == {"chat", "image", "video", "tts", "music"}
+    assert strategy["selection"]["video"]["vendor"] == "openai"
     assert all(isinstance(quote["estimated_cost_minor"], int) for quote in strategy["quotes"])
     assert strategy["quotes"][0]["estimated_cost"] is True
 
@@ -541,6 +542,9 @@ def test_complete_demo_workflow_and_case(db: Session, client: TestClient):
     assert run_response.status_code == 201
     run = run_response.json()
     assert run["status"] == "PLANNING" and len(run["scenes"]) == 3
+    assert "Show the product without people" in run["scenes"][0]["prompt"]
+    assert "Noura Glow bottle on a warm cream plinth" not in run["scenes"][0]["prompt"]
+    assert "show every required element together" in run["scenes"][0]["prompt"]
     scene = run["scenes"][0]
     edited = client.put(
         f"/thikra/runs/{run['id']}/scenes/{scene['id']}",

@@ -281,7 +281,7 @@ def test_complete_external_agent_rest_flow(commerce_client: TestClient, commerce
     assert started.json()["status"] == "REVIEW_REQUIRED"
     job = commerce_db.scalar(select(FulfillmentJob).where(FulfillmentJob.order_id == order_id))
     run = commerce_db.get(GenerationRun, job.generation_run_id)
-    assert json.loads(run.provider_selection_json)["video"]["vendor"] == "gmicloud"
+    assert json.loads(run.provider_selection_json)["video"]["vendor"] == "openai"
 
     retried = commerce_client.post(
         f"/api/v1/orders/{order_id}/retry",
@@ -430,6 +430,9 @@ def test_sandbox_commercial_checkout_is_safe_and_can_be_replaced(
     )
     assert status.status_code == 200, status.text
     assert status.json()["payment"]["payment_state"] == "SANDBOX_SETTLED_NO_REAL_FUNDS"
+    assert status.json()["payment"]["sandbox_test_settlement"] is True
+    assert status.json()["payment"]["fulfillment_authorized"] is True
+    assert status.json()["payment"]["customer_payment_collected"] is False
     assert "network-token-never-returned" not in status.text
 
 
@@ -478,7 +481,7 @@ def test_commerce_provider_constraints_normalize_and_are_enforced(
     run = commerce_db.get(GenerationRun, job.generation_run_id)
     selected = json.loads(run.provider_selection_json)
     assert {choice["vendor"] for choice in selected.values()} <= {"openai", "gmicloud"}
-    assert selected["video"]["vendor"] == "gmicloud"
+    assert selected["video"]["vendor"] == "openai"
     assert "replicate" not in {choice["vendor"] for choice in selected.values()}
 
 

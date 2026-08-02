@@ -168,6 +168,10 @@ All provider classes are imported only by `app/repo/provider_catalog.py`.
 Adding one is a single `CatalogEntry` (see AGENTS Rule 4). `*` on Replicate/LMNT
 means the provider accepts any slug (no model families).
 
+OpenAI Sora (`sora-2`) is the automatic video choice for an unconstrained run.
+An explicit provider selection or mandate allow/deny policy overrides that
+preference.
+
 | Slot  | Vendor      | Class                   | Key env var           | Default model |
 |-------|-------------|-------------------------|-----------------------|---------------|
 | chat  | openai      | `chat()` fn             | `OPENAI_API_KEY`      | `gpt-4.1-nano` |

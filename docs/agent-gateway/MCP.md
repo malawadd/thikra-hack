@@ -20,10 +20,13 @@ If the link was opened, expired, or needs to move to another device, call
 returning exactly one fresh hosted URL, which an agent can show as both the
 clickable link and QR code.
 
-The wait tool polls every three seconds and returns sanitized status only. A
-completed Sandbox authorization deliberately ends at
-`MERCHANT_CHARGE_REQUIRED`: it does not claim money moved and it does not
-launch provider work. `thikra_start_order` remains blocked until an exact,
+The wait tool polls every three seconds and returns sanitized status only. With
+the intentional Sandbox test-settlement option enabled, a completed checkout
+returns `SANDBOX_SETTLED_NO_REAL_FUNDS` and `next_action:
+START_FULFILLMENT`. The agent must call `thikra_start_order` immediately; this
+authorizes provider work for the test while recording zero customer funds
+collected. In production, completion instead returns
+`MERCHANT_CHARGE_REQUIRED`, and fulfillment remains blocked until an exact,
 documented merchant charge is recorded and reported to Prava.
 
 ## Use locally from Codex Desktop

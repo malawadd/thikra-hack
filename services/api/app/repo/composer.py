@@ -75,6 +75,48 @@ def _asset_url_or_none(step) -> str | None:
     return assets[0].url if assets else None
 
 
+def _scene_track_urls(b2_run, scene_count: int) -> tuple[list[str | None], list[str | None], str | None]:
+    """Extract B2 tracks by media type rather than a fixed step position.
+
+    Video and narration are concurrent, so a partial result can omit a step.
+    Selecting by position then risks dropping a completed video or treating
+    narration as music.  The first audio track per scene is narration; a
+    remaining trailing audio track is optional music.
+    """
+    videos: list[str] = []
+    speech: list[str] = []
+    other_audio: list[str] = []
+    for step in b2_run.run.steps:
+        for asset in getattr(step, "assets", None) or []:
+            media_type = (getattr(asset, "media_type", "") or "").lower()
+            if media_type.startswith("video/"):
+                videos.append(asset.url)
+            elif media_type.startswith("audio/"):
+                metadata = getattr(asset, "metadata", None) or {}
+                if metadata.get("audio_type") == "speech":
+                    speech.append(asset.url)
+                else:
+                    other_audio.append(asset.url)
+    # Modern TTS connectors mark speech explicitly.  Keep a positional
+    # fallback for older providers whose audio assets predate that metadata.
+    if not speech:
+        narrations = [
+            _asset_url_or_none(b2_run.run.steps[index * 2 + 1])
+            if index * 2 + 1 < len(b2_run.run.steps)
+            else None
+            for index in range(scene_count)
+        ]
+        music = _asset_url_or_none(b2_run.run.steps[-1]) if len(b2_run.run.steps) > scene_count * 2 else None
+    else:
+        narrations = [speech[i] if i < len(speech) else None for i in range(scene_count)]
+        music = other_audio[0] if other_audio else None
+    return (
+        [videos[i] if i < len(videos) else None for i in range(scene_count)],
+        narrations,
+        music,
+    )
+
+
 def _key_from_asset_url(url: str) -> str:
     """Strip the `<bucket>/` prefix from a durable B2 URL to get the object key.
 
@@ -110,12 +152,11 @@ def _group_scenes(b2_run, b1_run, spec: StoryboardSpec, tmp: Path) -> list[_Scen
       there is then no visual at all to show.
     - Narration: a failed/absent TTS step yields `narration_path=None`.
     """
-    steps = b2_run.run.steps
     kf_steps = b1_run.run.steps
     bundles: list[_SceneBundle] = []
+    video_urls, narration_urls, _ = _scene_track_urls(b2_run, len(spec.scenes))
     for i, scene in enumerate(spec.scenes):
-        vi, ti = 2 * i, 2 * i + 1
-        video_url = _asset_url_or_none(steps[vi]) if vi < len(steps) else None
+        video_url = video_urls[i]
         video_path = still_path = None
         if video_url is not None:
             video_path = _download(video_url, tmp / f"scene_{i:02d}.mp4")
@@ -128,9 +169,9 @@ def _group_scenes(b2_run, b1_run, spec: StoryboardSpec, tmp: Path) -> list[_Scen
                 )
             still_path = _download(kf_url, tmp / f"scene_{i:02d}_still.png")
             logger.info("scene video fell back to keyframe still", extra={
-                "scene_index": i, "video_step_index": vi,
+                "scene_index": i,
             })
-        narration_url = _asset_url_or_none(steps[ti]) if ti < len(steps) else None
+        narration_url = narration_urls[i]
         bundles.append(_SceneBundle(
             index=i,
             video_path=video_path,
@@ -145,21 +186,19 @@ def _group_scenes(b2_run, b1_run, spec: StoryboardSpec, tmp: Path) -> list[_Scen
     return bundles
 
 
-def _music_url(b2_run) -> str | None:
+def _music_url(b2_run, scene_count: int) -> str | None:
     """URL of the trailing music step's asset, or None when music is absent.
 
     Music is the LAST step of the Stage B2 run. With `fail_fast=False` a
     failed music step is still present (order preserved) but assetless, so
     treat 'present-but-assetless' as 'no music'."""
-    steps = b2_run.run.steps
-    if not steps:
-        return None
-    return _asset_url_or_none(steps[-1])
+    _, _, music = _scene_track_urls(b2_run, scene_count)
+    return music
 
 
-def _download_music(b2_run, tmp: Path) -> Path | None:
+def _download_music(b2_run, scene_count: int, tmp: Path) -> Path | None:
     """Download the run's music track, or None when music is unavailable."""
-    url = _music_url(b2_run)
+    url = _music_url(b2_run, scene_count)
     return _download(url, tmp / "music.wav") if url else None
 
 
@@ -260,7 +299,7 @@ def _concat_video(scenes: list[_SceneBundle], tmp: Path, canvas: tuple[int, int]
 
 
 def _mix_audio(
-    scenes: list[_SceneBundle], music_path: Path | None, tmp: Path,
+    scenes: list[_SceneBundle], music_path: Path | None, tmp: Path, total_duration: float
 ) -> Path | None:
     """Lay available narration WAVs at scene start times + add the music track.
 
@@ -303,10 +342,11 @@ def _mix_audio(
     if not mix_labels:
         return None  # no narration and no music — silent final video
 
-    filters.append(
+    filters += [
         f"{''.join(mix_labels)}amix=inputs={len(mix_labels)}"
-        ":duration=longest:dropout_transition=0[aout]"
-    )
+        ":duration=longest:dropout_transition=0[mixed]",
+        f"[mixed]atrim=duration={total_duration}[aout]",
+    ]
     out = tmp / "audio.m4a"
     _run_ffmpeg(
         [*inputs, "-filter_complex", ";".join(filters),
@@ -472,7 +512,7 @@ def compose_final(b2_run, b1_run, spec: StoryboardSpec, canvas: tuple[int, int] 
     with tempfile.TemporaryDirectory(prefix="genblaze-compose-") as tmp_str:
         tmp = Path(tmp_str)
         scenes = _group_scenes(b2_run, b1_run, spec, tmp)
-        music_path = _download_music(b2_run, tmp)
+        music_path = _download_music(b2_run, len(spec.scenes), tmp)
         # Notices derive from the grouped bundles + music presence (single
         # source of layout truth); `_finalize_with_captions` may append a
         # caption-degradation notice below.
@@ -484,7 +524,7 @@ def compose_final(b2_run, b1_run, spec: StoryboardSpec, canvas: tuple[int, int] 
         })
 
         video_only = _concat_video(scenes, tmp, canvas)
-        audio_mix = _mix_audio(scenes, music_path, tmp)
+        audio_mix = _mix_audio(scenes, music_path, tmp, spec.total_duration_sec)
         final_path = _finalize_with_captions(video_only, audio_mix, scenes, tmp, notices)
 
         # Embed the Stage B2 Manifest into the MP4 if the helper is available.

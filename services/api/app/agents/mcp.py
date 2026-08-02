@@ -53,8 +53,10 @@ mcp_server = MCPServer(
     instructions=(
         "Use the service catalog and deterministic quote before creating an order. "
         "For payment: create authorization, present checkout_url as a clickable link and render a QR code encoding that exact URL before the human opens it. "
-        "then call thikra_wait_for_payment. A Prava completion becomes MERCHANT_CHARGE_REQUIRED; "
-        "do not start fulfillment until a documented exact merchant charge is recorded. Generation is not delivery, "
+        "then call thikra_wait_for_payment. If it returns SANDBOX_SETTLED_NO_REAL_FUNDS with "
+        "next_action START_FULFILLMENT, immediately call thikra_start_order: that is a completed Sandbox "
+        "test checkout with zero customer funds collected. In production, MERCHANT_CHARGE_REQUIRED remains blocked "
+        "until a documented exact merchant charge is recorded. Generation is not delivery, "
         "and delivery is not buyer acceptance. Use test fulfillment only when the user "
         "explicitly requests a local Sandbox test: it creates real provider spend but no customer payment."
     ),
@@ -162,7 +164,7 @@ async def thikra_wait_for_payment(order_id: str, timeout_seconds: int = 90) -> d
 
 @mcp_server.tool(name="thikra_start_order")
 def thikra_start_order(order_id: str) -> dict[str, Any]:
-    """Idempotently start fulfillment only after exact payment completion."""
+    """Idempotently start fulfillment after an exact payment or completed Sandbox test checkout."""
     return gateway.start_paid_order(_identity(), order_id)
 
 

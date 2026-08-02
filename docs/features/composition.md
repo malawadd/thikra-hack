@@ -56,7 +56,8 @@ this.
         [1:a]adelay=8000|8000[v1];
         ...;
         [N:a]volume=-18dB[mus];
-        [v0][v1]...[mus]amix=inputs=N+1:duration=longest:dropout_transition=0[aout]"
+        [v0][v1]...[mus]amix=inputs=N+1:duration=longest:dropout_transition=0[mixed];
+        [mixed]atrim=duration=<mandate duration>[aout]"
        -map [aout] -c:a aac -b:a 192k audio.m4a
    ```
 
@@ -65,7 +66,9 @@ this.
    `dropout_transition=0` stops the surviving tracks from being re-leveled
    when a shorter one (a narration) ends. Note **no `apad`**: padding to an
    unbounded length would make `amix=longest` never terminate — the delayed
-   narrations stay finite and `longest` bounds the mix.
+   narrations stay finite and `longest` bounds the mix. `atrim` then caps the
+   mixed audio at the confirmed mandate duration, so a long narration cannot
+   silently turn a four-second video order into a longer delivery.
 
    **Audio is best-effort.** The graph is built only from tracks that
    exist: ffmpeg input indices track *added* inputs (not scene index), so a
@@ -132,6 +135,12 @@ Stages B1 and B2 themselves are streamed via `Pipeline.astream()` — the
 async variant landed in genblaze-core 0.3.2 — so provider HTTP
 round-trips don't block the loop between events either. The whole SSE
 pipeline (B1 → B2 → C) is non-blocking end-to-end.
+
+The composer classifies B2 outputs by media type rather than assuming a
+fixed `(video, narration)` completion position. This preserves a completed
+provider clip when a concurrent sibling fails or is omitted; the first audio
+track for each scene is narration and a remaining trailing audio track is
+optional music.
 
 ## Failure mode
 

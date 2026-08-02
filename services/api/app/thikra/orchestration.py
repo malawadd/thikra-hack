@@ -29,20 +29,39 @@ from app.thikra.service import mandate_schema
 from app.thikra.verification import inspect_file
 
 
-async def _pipeline_result(pipeline, *, timeout: int, best_effort: bool = False):
+async def _pipeline_result(
+    pipeline, *, timeout: int, best_effort: bool = False
+) -> tuple[object, list[dict[str, object]]]:
+    """Return a pipeline result and a sanitized record of failed steps.
+
+    B2 deliberately keeps video, narration, and music best-effort so one
+    provider outage does not abort sibling work.  That must not make a failed
+    *required* video invisible to the commercial workflow, however.  Keep the
+    stream's failure evidence so the caller can make that distinction.
+    """
     result = None
+    failures: list[dict[str, object]] = []
     async for event in pipeline.astream(
         sink=sink(),
         timeout=timeout,
         fail_fast=not best_effort,
         raise_on_failure=not best_effort,
     ):
+        if getattr(event, "type", None) == "step.failed":
+            failures.append(
+                {
+                    "step_index": getattr(event, "step_index", None),
+                    "provider": getattr(event, "provider", None),
+                    "model": getattr(event, "model", None),
+                    "error": str(getattr(event, "error", None) or "Provider step failed")[:500],
+                }
+            )
         candidate = getattr(event, "result", None)
         if candidate is not None:
             result = candidate
     if result is None:
         raise RuntimeError("Genblaze pipeline completed without a result")
-    return result
+    return result, failures
 
 
 def _record(run_id: str, event_type: str, message: str, related: list[str] | None = None) -> None:
@@ -98,6 +117,18 @@ def _persist_delivery(
             return record
 
         selection = json.loads(run.provider_selection_json)
+        video_assets = [
+            asset
+            for step in b2_result.run.steps
+            for asset in (step.assets or [])
+            if (asset.media_type or "").lower().startswith("video/")
+        ]
+        narration_assets = [
+            asset
+            for step in b2_result.run.steps
+            for asset in (step.assets or [])
+            if (asset.media_type or "").lower().startswith("audio/")
+        ][: len(scenes)]
         for index, scene in enumerate(scenes):
             scene.status = "COMPLETED"
             scene.verification_state = "PENDING"
@@ -107,18 +138,19 @@ def _persist_delivery(
                 if assets:
                     choice = selection["image"]
                     add_asset(scene, assets[0], "image", choice["vendor"], choice["model"])
-            video_index, voice_index = index * 2, index * 2 + 1
-            if video_index < len(b2_result.run.steps):
-                assets = b2_result.run.steps[video_index].assets or []
-                if assets:
-                    choice = selection["video"]
-                    add_asset(scene, assets[0], "video", choice["vendor"], choice["model"])
-                    generated_video = True
-            if voice_index < len(b2_result.run.steps):
-                assets = b2_result.run.steps[voice_index].assets or []
-                if assets:
-                    choice = selection["tts"]
-                    add_asset(scene, assets[0], "narration", choice["vendor"], choice["model"])
+            if index < len(video_assets):
+                choice = selection["video"]
+                add_asset(scene, video_assets[index], "video", choice["vendor"], choice["model"])
+                generated_video = True
+            if index < len(narration_assets):
+                choice = selection["tts"]
+                add_asset(
+                    scene,
+                    narration_assets[index],
+                    "narration",
+                    choice["vendor"],
+                    choice["model"],
+                )
             if not generated_video:
                 scene.verification_state = "FAIL"
 
@@ -288,10 +320,10 @@ async def execute_generation_run(run_id: str) -> None:
         )
 
         _record(run_id, "generation.keyframes.started", "Reference and keyframe pipelines started")
-        b0_result = await _pipeline_result(
+        b0_result, _ = await _pipeline_result(
             build_reference_pipeline(spec, image_entry, image_choice["model"]), timeout=240
         )
-        b1_result = await _pipeline_result(
+        b1_result, _ = await _pipeline_result(
             build_keyframe_pipeline(spec, image_entry, image_choice["model"], b0_result),
             timeout=600,
         )
@@ -302,7 +334,7 @@ async def execute_generation_run(run_id: str) -> None:
         _record(
             run_id, "generation.media.started", "Video, narration, and music generation started"
         )
-        b2_result = await _pipeline_result(
+        b2_result, b2_failures = await _pipeline_result(
             build_media_pipeline(
                 spec,
                 b1_result,
@@ -316,6 +348,33 @@ async def execute_generation_run(run_id: str) -> None:
             timeout=settings.max_run_duration_sec,
             best_effort=True,
         )
+        video_failures = [
+            failure
+            for failure in b2_failures
+            if failure["provider"] == video_entry.vendor and failure["model"] == video_choice["model"]
+        ]
+        generated_videos = [
+            asset
+            for step in b2_result.run.steps
+            for asset in (step.assets or [])
+            if (asset.media_type or "").lower().startswith("video/")
+        ]
+        missing_video_scenes = list(range(len(generated_videos) + 1, len(scenes) + 1))
+        if video_failures:
+            _record(
+                run_id,
+                "generation.video.failed",
+                "Required provider video step failed",
+            )
+        if missing_video_scenes:
+            details = "; ".join(
+                str(failure.get("error", "Provider step failed")) for failure in video_failures
+            )
+            raise RuntimeError(
+                "Required provider-generated video is missing for scene(s) "
+                f"{', '.join(map(str, missing_video_scenes))}. "
+                f"{details or 'The provider returned no durable video asset.'}"
+            )
         _record(run_id, "composition.started", "ffmpeg composition started")
         final_asset, notices = await asyncio.to_thread(
             compose_final, b2_result, b1_result, spec, canvas

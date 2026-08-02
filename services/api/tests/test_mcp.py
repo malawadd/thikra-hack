@@ -238,6 +238,31 @@ async def test_wait_for_payment_returns_truthful_merchant_charge_stop(
     assert result["wait_completed"] is True
 
 
+@pytest.mark.asyncio
+async def test_wait_for_payment_starts_completed_sandbox_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    identity = gateway.GatewayIdentity("key", "application", "principal", ("payments:create",))
+
+    async def sandbox_settled(*_args, **_kwargs):
+        return {
+            "payment": {
+                "payment_state": "SANDBOX_SETTLED_NO_REAL_FUNDS",
+                "paid_amount_minor": 0,
+                "sandbox_test_settlement": True,
+                "customer_payment_collected": False,
+            },
+            "reconciliation": {"status": "completed"},
+        }
+
+    monkeypatch.setattr(gateway, "payment_status", sandbox_settled)
+    result = await gateway.wait_for_payment(identity, "order-1", timeout_seconds=3)
+    assert result["next_action"] == "START_FULFILLMENT"
+    assert result["wait_completed"] is True
+    assert result["sandbox_test_settlement"] is True
+    assert result["customer_payment_collected"] is False
+
+
 def test_paid_mcp_start_schedules_live_fulfillment(monkeypatch: pytest.MonkeyPatch):
     scheduled: list[str] = []
     monkeypatch.setattr(gateway, "_schedule_live_fulfillment", scheduled.append)

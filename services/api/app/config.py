@@ -104,17 +104,11 @@ class Settings(BaseSettings):
     # `-ultra-` is max quality (slower/pricier), `-fast-` the cheapest. The
     # flagship balances quality and the per-scene fan-out cost; flip via env.
     image_model: str = "imagen-4.0-generate-001"
-    # Stage B2 — image-to-video. `video_provider` selects which Genblaze
-    # provider drives the per-scene clips: `gmicloud` (default, Kling
-    # Image2Video) or `decart`. Default is GMICloud because Decart RETIRED
-    # image-to-video — its current Lucy models are video-to-video only, so
-    # they can't animate a keyframe. If the selected provider's key is missing
-    # at boot we swap to the other and log it; the run still completes.
-    video_provider: str = "gmicloud"
-    # Decart video model — only used if `video_provider=decart`. NOTE: Decart
-    # no longer offers image-to-video (lucy-* are video-to-video now), so this
-    # path can't drive the keyframe→clip step; kept for the fallback resolver.
-    video_model: str = "lucy-2.1"
+    # Stage B2 — image-to-video. OpenAI Sora is the preferred automatic
+    # selection for unconstrained runs; buyers can still explicitly select
+    # another configured, mandate-compliant catalog provider.
+    video_provider: str = "openai"
+    video_model: str = "sora-2"
     # GMICloud image-to-video model (the working i2v path). Kling V2.1 Master
     # takes the keyframe (routed from step inputs) + a motion prompt.
     gmi_video_model: str = "Kling-Image2Video-V2.1-Master"

@@ -290,6 +290,13 @@ async def wait_for_payment(
     for attempt in range(attempts):
         last = await payment_status(identity, order_id)
         state = last["payment"]["payment_state"]
+        if state == "SANDBOX_SETTLED_NO_REAL_FUNDS":
+            return last | {
+                "next_action": "START_FULFILLMENT",
+                "wait_completed": True,
+                "sandbox_test_settlement": True,
+                "customer_payment_collected": False,
+            }
         if state == "MERCHANT_CHARGE_REQUIRED":
             return last | {"next_action": "MERCHANT_CHARGE_REQUIRED", "wait_completed": True}
         if state in {"FAILED", "EXPIRED"}:
@@ -324,6 +331,7 @@ def start_paid_order(identity: GatewayIdentity, order_id: str) -> dict[str, Any]
             raise LookupError("Order not found")
         start_order(db, identity.auth(), order)
         response = serialize_order(db, order, detail=True)
+        response["next_action"] = "FULFILLMENT_STARTED"
     _schedule_live_fulfillment(order_id)
     return response
 
@@ -411,7 +419,12 @@ def request_retry(
         if order is None:
             raise LookupError("Order not found")
         retry_order(db, identity.auth(), order, component, reason)
-        return serialize_order(db, order, detail=True)
+        response = serialize_order(db, order, detail=True)
+    # In SANDBOX/LIVE a retry is a new provider run, not a verification
+    # fixture.  Run it outside the MCP request just like the first attempt.
+    if response.get("status") == "FULFILLING":
+        _schedule_live_fulfillment(order_id)
+    return response
 
 
 def open_dispute(

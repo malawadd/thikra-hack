@@ -54,7 +54,14 @@ def _make_spec(n: int = 3) -> StoryboardSpec:
 
 def _step(url: str | None):
     """A run step that produced one asset, or a FAILED/assetless step (url=None)."""
-    return SimpleNamespace(assets=[SimpleNamespace(url=url)] if url else [])
+    media_type = (
+        "video/mp4"
+        if url and url.endswith(".mp4")
+        else "audio/wav"
+        if url and url.endswith(".wav")
+        else None
+    )
+    return SimpleNamespace(assets=[SimpleNamespace(url=url, media_type=media_type)] if url else [])
 
 
 def _make_b2_run(
@@ -163,6 +170,26 @@ def test_group_scenes_pairs_video_and_narration(tmp_path: Path) -> None:
     assert "explainers/run-abc123/step-00/scene.mp4" in keys_fetched
 
 
+def test_group_scenes_uses_media_type_when_b2_steps_are_reordered(tmp_path: Path) -> None:
+    """A completed clip must survive a partial/concurrent B2 result."""
+    spec = _make_spec(1)
+    narration = _step(NARRATION_URLS[0])
+    narration.assets[0].metadata = {"audio_type": "speech"}
+    b2_run = SimpleNamespace(
+        run=SimpleNamespace(
+            steps=[narration, _step(SCENE_URLS[0])], run_id="test-run-id"
+        ),
+        manifest=SimpleNamespace(manifest_uri="https://b/manifests/test.json"),
+    )
+    fake = MagicMock()
+    fake.get.side_effect = lambda key: b"fake-bytes"
+    with patch.object(composer, "backend", return_value=fake):
+        bundles = composer._group_scenes(b2_run, _make_b1_run(1), spec, tmp_path)
+    assert bundles[0].video_path is not None
+    assert bundles[0].narration_path is not None
+    assert bundles[0].still_path is None
+
+
 def test_group_scenes_falls_back_to_keyframe_when_video_missing(tmp_path: Path) -> None:
     """A failed video clip falls back to the scene's keyframe still (not fatal)."""
     spec = _make_spec(3)
@@ -222,6 +249,7 @@ def test_compose_final_music_unavailable_mixes_narration_only() -> None:
     mix = _filter_for(calls, "mix-audio")
     assert "[mus]" not in mix  # music absent
     assert "amix=inputs=3" in mix  # three narration tracks only
+    assert "atrim=duration=24.0" in mix
     assert asset.media_type == "video/mp4"
 
 

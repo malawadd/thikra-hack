@@ -524,9 +524,23 @@ def provider_strategy(
             if not chosen["configured"]:
                 raise ValueError(f"Selected provider '{chosen['vendor']}' is not configured for {slot}")
         else:
+            # A configured preferred video vendor is the product default for
+            # unconstrained briefs. It still yields to the mandate: an
+            # allow-list or forbidden-provider policy simply falls back to the
+            # highest-scoring compliant candidate.
+            preferred_vendor = settings.video_provider if slot == "video" else None
             chosen = next(
-                (c for c in candidates if c["configured"] and c["compliant"]), None
+                (
+                    c
+                    for c in candidates
+                    if c["vendor"] == preferred_vendor and c["configured"] and c["compliant"]
+                ),
+                None,
             )
+            if chosen is None:
+                chosen = next(
+                    (c for c in candidates if c["configured"] and c["compliant"]), None
+                )
             if chosen is None:
                 raise ValueError(f"No configured mandate-compliant provider is available for {slot}")
         selection[slot] = {
@@ -600,27 +614,30 @@ def launch_run(
     db.flush()
     payment.run_id = run.id
     video = selection.get("video", {"vendor": "replicate", "model": "minimax/video-01"})
-    planned_scenes = [
-        (
-            "Noura Glow bottle on a warm cream plinth, mint accents, no people.",
-            "\u0646\u0648\u0631\u0643 \u064a\u0628\u062f\u0623 \u0645\u0646 \u0639\u0646\u0627\u064a\u0629 \u0628\u0633\u064a\u0637\u0629.",
-        ),
-        (
-            "Close product texture detail with soft morning light and abstract ripples.",
-            "\u062a\u0631\u0643\u064a\u0628\u0629 \u0644\u0637\u064a\u0641\u0629 \u0644\u0631\u0648\u062a\u064a\u0646\u0643 \u0627\u0644\u064a\u0648\u0645\u064a.",
-        ),
-        (
-            "Noura Glow hero pack shot against a contemporary Riyadh-inspired pattern.",
-            "\u0646\u0648\u0631\u0629 \u062c\u0644\u0648\u060c \u0625\u0634\u0631\u0627\u0642\u0629 \u062f\u0627\u0641\u0626\u0629 \u0628\u0637\u0631\u064a\u0642\u062a\u0643.",
-        ),
-    ]
+    brief_source = json.loads(brief.source_json)
+    creative_brief = str(brief_source.get("creative_brief") or brief.objective).strip()
+    required_elements = [str(item) for item in brief_source.get("required_elements", [])]
+    prompt_suffix = (
+        " Required elements: " + "; ".join(required_elements) + "."
+        if required_elements
+        else ""
+    )
+    narration = str(brief_source.get("objective") or brief.objective).strip()
     required_duration = int(schema["required_duration_sec"])
     # A short single-clip order must not silently expand into the legacy
     # three-scene explainer shape.  Longer products keep its three 5-second
     # beats; the local smoke path uses one provider clip at the quoted length.
-    if required_duration <= 5:
-        planned_scenes = planned_scenes[:1]
-    for position, (prompt, narration) in enumerate(planned_scenes, start=1):
+    scene_count = 1 if required_duration <= 5 else 3
+    for position in range(1, scene_count + 1):
+        prompt = (
+            creative_brief
+            + prompt_suffix
+            + " Composition requirement: show every required element together "
+            "in one clear, uncropped frame. Do not isolate, crop out, or replace "
+            "the primary subject or any required element with a close-up."
+        )
+        if scene_count > 1:
+            prompt += f" Story beat {position} of {scene_count}."
         db.add(
             Scene(
                 run_id=run.id,
