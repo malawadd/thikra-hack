@@ -27,3 +27,21 @@ returned. The diagnostic does not persist them or show them in the browser.
 Local API startup runs `alembic upgrade head` before Uvicorn. This preserves existing payment and
 run records while applying additive schema changes; `Base.metadata.create_all()` alone does not
 migrate an existing SQLite database.
+
+## HTTPS tunnels and mutation origins
+
+When SvelteKit is reached through an HTTPS tunnel, its internal request URL may still use the local
+host while the browser correctly sends the public HTTPS `Origin`. Configure the public URL in the
+API root `.env` and trust the exact public origin in `apps/web/.env`:
+
+```env
+# .env — used by FastAPI for Prava callback URLs
+PUBLIC_WEB_URL=https://your-tunnel.example
+
+# apps/web/.env — server-only SvelteKit BFF configuration
+CSRF_TRUSTED_ORIGINS=https://your-tunnel.example
+```
+
+Multiple public origins may be comma-separated. Only exact origins are accepted; wildcard domains,
+paths, arbitrary forwarded headers, and sibling subdomains do not bypass the CSRF check. Restart the
+development stack after changing either file.

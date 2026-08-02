@@ -1,12 +1,16 @@
 import { env } from '$env/dynamic/private';
+import { isTrustedMutationOrigin } from '$lib/server/origin';
 import type { RequestHandler } from './$types';
 
 const forward: RequestHandler = async ({ request, params, url, fetch }) => {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
     const origin = request.headers.get('origin');
-    if (origin && origin !== url.origin) {
+    const trustedOrigins = [env.PUBLIC_WEB_URL, env.CSRF_TRUSTED_ORIGINS]
+      .filter(Boolean)
+      .join(',');
+    if (!isTrustedMutationOrigin(origin, url.origin, trustedOrigins)) {
       return Response.json(
-        { detail: { code: 'CSRF_ORIGIN_MISMATCH', message: 'Cross-origin state changes are not accepted.' } },
+        { detail: { code: 'CSRF_ORIGIN_MISMATCH', message: 'This origin is not trusted for state-changing requests.' } },
         { status: 403 }
       );
     }
