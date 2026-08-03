@@ -41,6 +41,7 @@ from app.thikra.schemas import BriefCreate, CreativeMandate
 from app.thikra.state_machine import retry_allowed
 
 DEMO_CAMPAIGN = "Noura Glow - Saudi launch"
+PENDING_STORYBOARD_NARRATION = "Pending storyboard voiceover."
 
 
 def _load(value: str | None, fallback: Any = None) -> Any:
@@ -622,7 +623,6 @@ def launch_run(
         if required_elements
         else ""
     )
-    narration = str(brief_source.get("objective") or brief.objective).strip()
     required_duration = int(schema["required_duration_sec"])
     # A short single-clip order must not silently expand into the legacy
     # three-scene explainer shape.  Longer products keep its three 5-second
@@ -643,7 +643,11 @@ def launch_run(
                 run_id=run.id,
                 position=position,
                 prompt=prompt,
-                narration=narration,
+                # The creative brief is visual-generation input, never text
+                # to speak verbatim. The live storyboard fills this with a
+                # concise spoken line before TTS runs; a human can still edit
+                # the placeholder before starting the run.
+                narration=PENDING_STORYBOARD_NARRATION,
                 status="PLANNED",
                 provider=video["vendor"],
                 model=video["model"],

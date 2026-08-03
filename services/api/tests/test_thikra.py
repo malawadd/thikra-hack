@@ -6,6 +6,7 @@ import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -21,9 +22,11 @@ from app.thikra.api import router
 from app.thikra.audit import append_event, verify_chain
 from app.thikra.database import Base, get_db
 from app.thikra.models import AuditEvent, GenerationRun, Mandate, MandateVersion
+from app.thikra.orchestration import _merge_storyboard_with_planned_scenes
 from app.thikra.payments import PravaPaymentGateway, sanitize_payment_result
 from app.thikra.schemas import BriefCreate, CreativeMandate
 from app.thikra.service import (
+    PENDING_STORYBOARD_NARRATION,
     compile_brief,
     confirm_mandate,
     materialize_demo_delivery,
@@ -34,6 +37,8 @@ from app.thikra.service import (
 from app.thikra.state_machine import InvalidTransition, retry_allowed, transition
 from app.thikra.storage import LocalEvidenceStorage
 from app.thikra.verification import inspect_file
+from app.types.storyboard import Scene as StoryboardScene
+from app.types.storyboard import StoryboardSpec
 
 
 def brief_payload() -> dict:
@@ -126,6 +131,35 @@ def test_provider_scores_and_budget_arithmetic(db: Session):
     assert strategy["selection"]["video"]["vendor"] == "openai"
     assert all(isinstance(quote["estimated_cost_minor"], int) for quote in strategy["quotes"])
     assert strategy["quotes"][0]["estimated_cost"] is True
+
+
+def test_storyboard_uses_spoken_copy_not_the_visual_brief():
+    spec = StoryboardSpec(
+        title="Mow",
+        style_prompt="Warm cinematic illustration.",
+        music_prompt="Bright pop.",
+        total_duration_sec=4,
+        scenes=[
+            StoryboardScene(
+                image_prompt="Generated image prompt.",
+                motion_prompt="The character waves.",
+                narration="ارتدِ قبعة مو، وخلي يومك أروع.",
+                caption="Mow",
+                duration_sec=4,
+            )
+        ],
+    )
+    planned = [
+        SimpleNamespace(
+            prompt="Show the spider wearing the Mow hat in one uncropped frame.",
+            narration=PENDING_STORYBOARD_NARRATION,
+        )
+    ]
+
+    merged = _merge_storyboard_with_planned_scenes(spec, planned)
+
+    assert merged.scenes[0].image_prompt == planned[0].prompt
+    assert merged.scenes[0].narration == "ارتدِ قبعة مو، وخلي يومك أروع."
 
 
 def test_permitted_providers_and_zero_retry_budget_are_enforced(db: Session):
@@ -543,6 +577,7 @@ def test_complete_demo_workflow_and_case(db: Session, client: TestClient):
     run = run_response.json()
     assert run["status"] == "PLANNING" and len(run["scenes"]) == 3
     assert "Show the product without people" in run["scenes"][0]["prompt"]
+    assert run["scenes"][0]["narration"] == "Pending storyboard voiceover."
     assert "Noura Glow bottle on a warm cream plinth" not in run["scenes"][0]["prompt"]
     assert "show every required element together" in run["scenes"][0]["prompt"]
     scene = run["scenes"][0]

@@ -25,7 +25,7 @@ from app.thikra.audit import append_event, canonical_json
 from app.thikra.database import SessionLocal
 from app.thikra.models import Asset as DBAsset
 from app.thikra.models import Evaluation, EvaluationResult, GenerationRun, MandateVersion, Scene
-from app.thikra.service import mandate_schema
+from app.thikra.service import PENDING_STORYBOARD_NARRATION, mandate_schema
 from app.thikra.verification import inspect_file
 
 
@@ -79,6 +79,43 @@ def _record(run_id: str, event_type: str, message: str, related: list[str] | Non
             payload={"message": message, "simulated": False},
             related_object_ids=related or [run.id],
         )
+        db.commit()
+
+
+def _merge_storyboard_with_planned_scenes(spec, planned_scenes) -> object:
+    """Keep visual constraints while preserving real spoken copy.
+
+    ``Scene.prompt`` is visual-generation input. Its narration placeholder is
+    replaced by the storyboard writer's concise voiceover, while an explicit
+    human narration edit remains authoritative.
+    """
+    return spec.model_copy(
+        update={
+            "scenes": [
+                scene.model_copy(
+                    update={
+                        "image_prompt": planned.prompt,
+                        "narration": (
+                            scene.narration
+                            if planned.narration == PENDING_STORYBOARD_NARRATION
+                            else planned.narration
+                        ),
+                    }
+                )
+                for scene, planned in zip(spec.scenes, planned_scenes, strict=False)
+            ]
+        }
+    )
+
+
+def _persist_storyboard_narration(run_id: str, spec) -> None:
+    """Store the actual TTS script as accountable scene evidence."""
+    with SessionLocal() as db:
+        scenes = list(
+            db.scalars(select(Scene).where(Scene.run_id == run_id).order_by(Scene.position))
+        )
+        for planned, generated in zip(scenes, spec.scenes, strict=False):
+            planned.narration = generated.narration
         db.commit()
 
 
@@ -270,6 +307,10 @@ async def execute_generation_run(run_id: str) -> None:
             canvas = tuple(
                 int(part) for part in mandate_policy["required_resolution"].lower().split("x")
             )
+            storyboard_seed = (
+                f"{prompt}\n\nRequired spoken language: "
+                f"{mandate_policy['required_language']}."
+            )
 
         chat_choice = selection["chat"]
         image_choice = selection["image"]
@@ -294,24 +335,16 @@ async def execute_generation_run(run_id: str) -> None:
             scene_duration = int(mandate_policy["required_duration_sec"])
         spec, _ = await asyncio.to_thread(
             generate_storyboard,
-            prompt,
+            storyboard_seed,
             chat_choice["model"],
             scene_count=scene_count,
             scene_duration=scene_duration,
         )
-        spec = spec.model_copy(
-            update={
-                "scenes": [
-                    scene.model_copy(
-                        update={"image_prompt": planned.prompt, "narration": planned.narration}
-                    )
-                    for scene, planned in zip(spec.scenes, scenes, strict=False)
-                ]
-            }
-        )
+        spec = _merge_storyboard_with_planned_scenes(spec, scenes)
         spec = spec.model_copy(
             update={"total_duration_sec": sum(scene.duration_sec for scene in spec.scenes)}
         )
+        _persist_storyboard_narration(run_id, spec)
         spec = snap_scene_durations(spec, video_entry)
         _record(
             run_id,

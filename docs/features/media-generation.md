@@ -3,7 +3,9 @@
 > **Thikra extension (2026-08-01):** outside DEMO,
 > `app/thikra/orchestration.py` executes this catalog-driven B0/B1/B2 path
 > after mandate, provider, and authorization checks. Confirmed planned-scene
-> prompts replace storyboard image/narration prompts before paid calls. OpenAI
+> prompts replace storyboard image prompts before paid calls. The storyboard
+> supplies short spoken narration in the mandated language unless a human has
+> explicitly edited a scene's narration. OpenAI
 > structured output also extracts semantic mandate fields; user-authored
 > budget, provider, rights, and approval limits remain authoritative.
 
@@ -20,9 +22,9 @@ This is a **provider switchboard**: every modality (script, image, video, TTS,
 music) can be driven by ANY provider in the catalog, chosen per-run. The UI's
 Providers panel is fed by `GET /providers`; the selection rides the
 `MediaRequest.selection` body and `pipelines.py` resolves each
-`CatalogEntry` from `app/repo/provider_catalog.py`. The default selection is
-the **simplest path** (fewest API keys): Replicate drives image/video/music
-(one token) and OpenAI drives chat + TTS — two keys to run end-to-end.
+`CatalogEntry` from `app/repo/provider_catalog.py`. For an unconstrained video
+run, OpenAI Sora is the default video selection; an explicit selection or
+mandate provider policy overrides it.
 
 ## Model selection: curated default + free-text override
 

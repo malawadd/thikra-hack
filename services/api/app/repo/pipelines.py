@@ -142,8 +142,10 @@ _STORYBOARD_INSTRUCTION = (
     'shapes, slight grain"). Then for every scene write a vivid '
     "`image_prompt` (one sentence, descriptive, no camera jargon), a "
     "`motion_prompt` describing how that frame should animate (subject + "
-    "camera motion only), a `narration` of 1-2 sentences in plain spoken "
-    "English, a short `caption` (<=60 chars), and a `duration_sec`. Pick a "
+    "camera motion only), a `narration` of 1-2 short, natural sentences in "
+    "the spoken language requested in the seed (never read or paraphrase the "
+    "creative instructions themselves), a short `caption` (<=60 chars), and "
+    "a `duration_sec`. Pick a "
     "`music_prompt` (mood + genre) and a `title`.\n\nSEED: {seed}"
 )
 
