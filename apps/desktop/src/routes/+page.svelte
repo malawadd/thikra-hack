@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { addEdge, Background, BackgroundVariant, Controls, MiniMap, SvelteFlow, SvelteFlowProvider, type Connection, type Edge, type Node } from '@xyflow/svelte';
-  import { Bot, Check, ChevronDown, CircleDollarSign, CloudOff, Command, FolderOpen, History, ImagePlus, KeyRound, LoaderCircle, PanelRightClose, Play, Plus, Redo2, Save, Settings, Sparkles, Trash2, Undo2, X } from 'lucide-svelte';
+  import { Bot, Check, ChevronDown, CircleDollarSign, CloudOff, Command, Film, FolderOpen, History, ImagePlus, KeyRound, LoaderCircle, PanelRightClose, Play, Plus, Redo2, Save, Settings, Sparkles, Trash2, Undo2, X } from 'lucide-svelte';
   import StudioNode from '$lib/StudioNode.svelte';
   import { api, ApiError, assetUrl, studioEvents } from '$lib/api';
   import { fromFlow, operationClosure, PORTS, toFlowEdges, toFlowNodes, validateConnection } from '$lib/graph';
@@ -17,7 +17,7 @@
   let selectedNodeId: string | null = null;
   let agentPrompt = '', proposal: Proposal | null = null, selectedOperations = new SvelteSet<string>();
   let estimate: Estimate | null = null, resumeEstimate: Estimate | null = null, execution: Execution | null = null;
-  let activity: StudioEvent[] = [], variantAssets: StudioAsset[] = [], showVariants = false, showLibrary = false;
+  let activity: StudioEvent[] = [], projectAssets: StudioAsset[] = [], variantAssets: StudioAsset[] = [], showVariants = false, showOutput = false, showLibrary = false;
   let showSettings = false, projects: Project[] = [], connections: ProviderConnection[] = [];
   let newProjectName = '', providerVendor = 'openai', providerSecret = '';
   let annotationAsset: StudioAsset | null = null, annotationBody = '', annotationKind: 'point' | 'rectangle' = 'point';
@@ -36,6 +36,7 @@
   $: configuredProvider = configuredProviders.find((item) => item.vendor === configuredVendor) ?? null;
   $: configuredModel = selectedNode ? String((selectedNode.data.config as Record<string, unknown>).model ?? '') : '';
   $: latestActivity = activity.at(-1) ?? null;
+  $: finalVideoAsset = projectAssets.find((asset) => asset.content_type.startsWith('video/') && asset.name.startsWith('compose output')) ?? projectAssets.find((asset) => asset.content_type.startsWith('video/')) ?? null;
   $: canResume = !running && !!execution && ['FAILED', 'CANCELLED'].includes(execution.status);
 
   function slotForNode(type: string): keyof ProviderMatrix | null {
@@ -57,7 +58,7 @@
     try {
       await refreshNodeCatalog(); online = true;
       const response = await api<{ items: Project[] }>('/studio/projects'); projects = response.items;
-      if (projects.length) await loadProject(projects[0].id);
+      if (projects.length) await loadProject(projects[0].id, true);
       else {
         const created = await api<Project>('/studio/projects', { method: 'POST', body: JSON.stringify({ name: 'Untitled creative', description: 'Your local visual workflow', budget_cap_minor: 500, currency: 'USD' }) });
         applyProject(created); await loadProjectAssets(created.id);
@@ -66,12 +67,14 @@
     finally { loading = false; }
   }
 
-  async function loadProject(id: string) { applyProject(await api<Project>(`/studio/projects/${id}`)); await loadProjectAssets(id); }
-  async function loadProjectAssets(id: string) {
+  async function loadProject(id: string, revealOutput = false) { applyProject(await api<Project>(`/studio/projects/${id}`)); await loadProjectAssets(id, revealOutput); }
+  async function loadProjectAssets(id: string, revealOutput = false) {
     const response = await api<{ items: StudioAsset[]; latest_image_variants: StudioAsset[] }>(`/studio/projects/${id}/assets`);
+    projectAssets = response.items;
     variantAssets = response.latest_image_variants;
     const previewUrls = variantAssets.map((asset) => assetUrl(asset.id));
     nodes = nodes.map((node) => node.data.type === 'image_generation' ? { ...node, data: { ...node.data, previewUrls } } : node);
+    if (revealOutput && response.items.some((asset) => asset.content_type.startsWith('video/') && asset.name.startsWith('compose output'))) showOutput = true;
   }
   async function refreshProjects() { projects = (await api<{ items: Project[] }>('/studio/projects')).items; }
   async function createStudioProject() {
@@ -213,8 +216,10 @@
           const failedNode = execution.nodes.find((node) => node.status === 'FAILED');
           error = failedNode ? `${failedNode.node_type.replaceAll('_',' ')} failed: ${failedNode.error ?? 'No provider detail was returned.'}` : execution.failure_reason ?? 'Workflow failed.';
         }
-        variantAssets = execution.nodes.flatMap((node) => node.output.assets ?? []); if (variantAssets.length) showVariants = true;
+        variantAssets = execution.nodes.flatMap((node) => node.output.assets ?? []).filter((asset) => asset.content_type.startsWith('image/'));
         if (project) await loadProject(project.id);
+        if (execution.status === 'SUCCEEDED' && finalVideoAsset) showOutput = true;
+        else if (variantAssets.length) showVariants = true;
       }
     }, () => { if (running) notice = 'Reconnecting to execution stream…'; });
   }
@@ -283,6 +288,7 @@
       <button class="new-node" onclick={() => showLibrary = !showLibrary}><Plus size={16} /> Add node</button>
       <button onclick={() => fileInput.click()}><ImagePlus size={16} /> Reference</button>
       {#if variantAssets.length}<button onclick={() => showVariants = true}><ImagePlus size={16} /> Generated looks <b>{variantAssets.length}</b></button>{/if}
+      {#if finalVideoAsset}<button class="result-button" onclick={() => showOutput = true}><Film size={16} /> Final video <b>READY</b></button>{/if}
       <button onclick={openSettings}><Settings size={16} /> Workspace settings</button>
       <input bind:this={fileInput} class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp" onchange={importReference} />
       <nav>
@@ -358,6 +364,8 @@
 
 {#if error}<div class="toast error"><X size={15} />{error}<button onclick={()=>error=''}><X size={13} /></button></div>{/if}
 {#if notice}<div class="toast"><Sparkles size={15} />{notice}<button onclick={()=>notice=''}><X size={13} /></button></div>{/if}
+
+{#if showOutput && finalVideoAsset}<div class="modal-backdrop" role="presentation"><section class="output-modal"><header><div><span class="eyebrow">FINAL OUTPUT</span><h2>Your video is ready</h2><p>This result remains attached to the project and can be reopened from the left sidebar.</p></div><button class="icon-btn" onclick={()=>showOutput=false}><X size={18}/></button></header><video src={assetUrl(finalVideoAsset.id)} controls playsinline preload="metadata"><track kind="captions" /></video><footer><div><strong>{finalVideoAsset.name}</strong><small>MP4 · {((finalVideoAsset.size ?? 0)/1024/1024).toFixed(2)} MB</small></div><a class="primary" href={assetUrl(finalVideoAsset.id)} target="_blank" rel="noopener noreferrer"><Film size={15}/> Open video</a></footer></section></div>{/if}
 
 {#if showVariants}<div class="modal-backdrop" role="presentation"><section class="variant-modal"><header><div><span class="eyebrow">LOOK REVIEW</span><h2>Choose the frame worth building on</h2><p>Generated images stay in this project. Pinning saves a revision and prepares a targeted animation cost.</p></div><button class="icon-btn" onclick={()=>showVariants=false}><X size={18}/></button></header><div class="annotation-tools"><select bind:value={annotationKind}><option value="point">Point feedback</option><option value="rectangle">Rectangle feedback</option></select><input bind:value={annotationBody} placeholder="What should the agent change here?"/><button class="subtle" onclick={saveAnnotation} disabled={!annotationGeometry || !annotationBody.trim()}><Check size={14}/>Save feedback</button></div><div class="variant-grid">{#each variantAssets as asset,index}<article class="variant-card"><button class="image-review" aria-label={`Annotate variant ${index+1}`} onclick={(event)=>placeAnnotation(event,asset)}><img src={assetUrl(asset.id)} alt={asset.name}/>{#if annotationAsset?.id===asset.id && annotationGeometry}<i class:rectangle={annotationKind==='rectangle'} style={`left:${annotationGeometry.x*100}%;top:${annotationGeometry.y*100}%;width:${(annotationGeometry.width ?? 0)*100}%;height:${(annotationGeometry.height ?? 0)*100}%`}></i>{/if}</button><div><span>Variant {index+1}</span><small>{asset.name}</small><button onclick={()=>pinVariant(index)}>Pin & prepare animation</button></div></article>{/each}</div></section></div>{/if}
 

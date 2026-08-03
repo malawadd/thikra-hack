@@ -31,6 +31,8 @@ Failed and cancelled executions expose a two-step resume flow: first review a fr
 
 The latest generated image variants are loaded from persisted project assets whenever a project opens, shown as thumbnails on the image node, and remain available through **Generated looks**. **Pin & prepare animation** saves the selector choice as a semantic revision, applies the selected video provider's valid duration grid, and estimates a targeted run beginning at the video node so image generation is not purchased again.
 
+A successful execution with a composed MP4 opens a playable **Final output** view immediately. The final result remains available after reload through **Final video · READY** in the project sidebar, with native playback controls, file size, and an external player action. Workflow completion therefore has an explicit visible delivery surface instead of leaving the output only in node metadata.
+
 Long-running nodes emit a live heartbeat with elapsed time every five seconds. Provider step events add per-variant progress, while the initial node event identifies the selected provider, model, variant count, and timeout. Development reload watches only `services/api/app`, preventing SQLite and WAL writes from restarting active executions.
 
 Imported PNG/JPEG/WebP, WAV/MP3, and MP4/WebM files are MIME and size checked, hashed, and copied below the configured Studio data directory. Paths are resolved before access. An import is uploaded with `genblaze-s3` only when a remote provider needs an external URL. Tauri exposes no shell or unrestricted filesystem capability.
