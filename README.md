@@ -2,7 +2,7 @@
 
 Thikra is a verify-then-pay creative-commerce application. A brand manager turns a brief into a versioned mandate, compares Genblaze providers, grants a bounded Prava authorization, reviews generation and verification evidence, and either accepts delivery, retries a failed component, rejects it, or opens a redress case.
 
-The active product is SvelteKit 2 / Svelte 5. The original Next.js frontend is retained under `reference/next-web` only for migration history. FastAPI remains authoritative; Genblaze remains the provider orchestration layer; Backblaze B2 remains the durable media store; ffmpeg remains the sole composition surface.
+The active products are a SvelteKit 2 / Svelte 5 web application and **Thikra Studio**, a Windows-first Tauri 2 creative workspace. The original Next.js frontend is retained under `reference/next-web` only for migration history. FastAPI remains authoritative; Genblaze remains the provider orchestration layer; Backblaze B2 remains the durable media store; ffmpeg remains the sole composition surface.
 
 ## Product preview
 
@@ -21,6 +21,7 @@ The responsive command center is also verified at a 390×844 mobile viewport: [m
 - Preserved Genblaze storyboard → keyframe → video/narration/music → ffmpeg path in sandbox/production.
 - B2 media metadata, lineage, hashes, server-side short-lived downloads, and one evidence JSON adapter.
 - SSE with stable envelopes, deterministic IDs, resume cursor, deduplication, reconnect backoff, and polling fallback.
+- Paid-workflow resume from failed/cancelled nodes with a fresh remaining-cost confirmation, parent execution lineage, and durable provider-output recovery.
 - Layered verification records, with real Pillow/ffprobe inspection for non-demo delivery.
 - Backend-enforced retry budgets, approval/rejection policy, redress cases, and a tamper-evident SHA-256 audit chain.
 - Complete Overview, New Brief, Runs, Asset Library, Evidence, Payments, Cases, and Integrations routes.
@@ -41,7 +42,16 @@ The same `pnpm setup` and `pnpm dev` commands work in PowerShell, cmd, macOS, an
 On Windows, stop all local Thikra web/API process trees with `pnpm stop:windows` or run
 `.\scripts\stop-app.ps1` directly from PowerShell. Use `.\scripts\stop-app.ps1 -WhatIf` to
 preview the exact PIDs without stopping anything. The script targets only listeners on ports
-43191, 43192, and 43292 plus their related Thikra launcher processes.
+43191, 43192, 43193, and 43292 plus their related Thikra launcher processes.
+
+For the local node-canvas desktop experience, install the [Tauri 2 Windows prerequisites](https://v2.tauri.app/start/prerequisites/), then run:
+
+```powershell
+pnpm setup:desktop
+pnpm dev:desktop
+```
+
+This milestone launches the Tauri shell, the static Svelte renderer, and the loopback FastAPI service together. It does not bundle Python or ffmpeg yet. Studio project metadata remains local, provider overrides are stored in Windows Credential Manager, and generated production media continues to use configured B2 storage. See [Thikra Studio](docs/features/desktop-studio.md).
 
 ## Runtime modes
 
@@ -60,15 +70,21 @@ Prava's official skill currently documents session creation, secure iframe autho
 ```text
 pnpm setup             install frontend and API dependencies
 pnpm dev               run SvelteKit :43191 and FastAPI :43192
+pnpm dev:desktop       run Tauri/Svelte :43193 and loopback FastAPI :43192
+pnpm setup:desktop     fetch the Tauri/Rust dependencies
 pnpm stop:windows      stop local Thikra web/API processes from PowerShell
 pnpm dev:agent         run the separate external buyer agent
 pnpm demo:agent        run the isolated MCP-to-delivery demonstration
 pnpm demo:human        run the human marketplace demonstration
 pnpm seed:commerce     seed the commerce catalog and demo developer identity
 pnpm build             build the SvelteKit Node application
+pnpm build:desktop:renderer build the desktop static renderer
+pnpm build:desktop     produce the Windows Tauri package
 pnpm lint              ESLint + Ruff
 pnpm typecheck         svelte-check
 pnpm test              backend and frontend unit/integration tests
+pnpm test:desktop      desktop graph and renderer tests
+pnpm test:desktop:e2e:windows build and smoke-test the package with tauri-driver
 pnpm test:commerce     commercial domain, REST, and MCP tests
 pnpm test:mcp          real MCP-client integration test
 pnpm test:e2e          Playwright end-to-end demo
@@ -110,10 +126,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [data model](docs/architecture/data-mode
 
 ```text
 apps/web/                 active SvelteKit product and Playwright test
+apps/desktop/             Tauri 2 + Svelte 5 local creative workspace
 apps/agent-client/        external MCP/REST buyer-agent demonstration
 packages/thikra-sdk/      local typed TypeScript commerce client
 reference/next-web/       archived original UI, excluded from workspace
 services/api/app/repo/    preserved provider catalog, Genblaze pipelines, composer
+services/api/app/studio/  revisioned graph, proposals, budgets, assets, executions
 services/api/app/thikra/  mandate, payment, run, verification, evidence, cases
 services/api/app/commerce catalog, quotes, orders, delivery, webhooks
 services/api/app/agents/  shared gateway facade and MCP adapter

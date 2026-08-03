@@ -23,6 +23,7 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False
 
 def initialize_database() -> None:
     from app.commerce import models as commerce_models  # noqa: F401
+    from app.studio import models as studio_models  # noqa: F401
     from app.thikra import models  # noqa: F401
 
     if settings.database_url.startswith("sqlite:///./"):

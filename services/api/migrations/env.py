@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.commerce import models as commerce_models  # noqa: F401
 from app.config import settings
+from app.studio import models as studio_models  # noqa: F401
 from app.thikra import models  # noqa: F401
 from app.thikra.database import Base
 

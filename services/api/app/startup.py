@@ -11,6 +11,7 @@ from app.agents.mcp import mcp_app
 from app.commerce.receipts import signing_key_document
 from app.commerce.service import seed_commerce
 from app.config import settings
+from app.studio.service import interrupt_incomplete_executions
 from app.thikra import initialize_database
 from app.thikra.database import SessionLocal
 from app.thikra.payments import validate_prava_configuration
@@ -40,6 +41,7 @@ def initialize_application(logger: logging.Logger) -> None:
     with SessionLocal() as db:
         seed_database(db)
         seed_commerce(db)
+        interrupted = interrupt_incomplete_executions(db)
     logger.info(
         "api startup",
         extra={
@@ -54,6 +56,7 @@ def initialize_application(logger: logging.Logger) -> None:
             "tts_model": settings.tts_model,
             "music_model": settings.music_model,
             "cors_origins": settings.cors_origins,
+            "studio_executions_interrupted": interrupted,
             "providers_configured": {
                 "openai": bool(settings.openai_api_key),
                 "replicate": bool(settings.replicate_api_token),

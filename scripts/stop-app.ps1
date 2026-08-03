@@ -13,7 +13,7 @@ Ports to inspect. Defaults to the web, API, and isolated E2E API ports.
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
     [ValidateNotNullOrEmpty()]
-    [int[]]$Ports = @(43191, 43192, 43292)
+    [int[]]$Ports = @(43191, 43192, 43193, 43292)
 )
 
 Set-StrictMode -Version Latest
@@ -55,9 +55,12 @@ function Test-ThikraLauncherCommand {
         'uvicorn\s+app\.main:app',
         'multiprocessing\.spawn.*spawn_main',
         'vite(\.js)?\s+dev.*43191',
+        'vite(\.js)?\s+dev.*43193',
         'concurrently.*--names\s+web,api',
-        'pnpm(\.c?js|\.cmd)?\s+(dev|dev:web|dev:api)',
-        '@thikra/web\s+dev'
+        'concurrently.*--names\s+api,studio',
+        'pnpm(\.c?js|\.cmd)?\s+(dev|dev:web|dev:api|dev:desktop)',
+        '@thikra/(web|desktop)\s+dev',
+        'tauri(\.exe)?\s+dev'
     )
     return [bool]($patterns | Where-Object { $CommandLine -match $_ } | Select-Object -First 1)
 }

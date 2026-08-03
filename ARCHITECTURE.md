@@ -2,6 +2,23 @@
 
 FastAPI owns policy and state. SvelteKit is a same-origin presentation/BFF layer and never receives server secrets. Existing Genblaze catalog, pipeline, storage sink, lineage, and ffmpeg composition code remain the media execution path.
 
+Thikra Studio is a second Svelte 5 surface inside a restrictive Tauri 2 shell. It talks directly to FastAPI over `127.0.0.1:43192`; the API accepts only exact development origins and never binds Studio to a public interface. Semantic graph snapshots are immutable while positions and viewport are stored independently.
+
+```mermaid
+flowchart LR
+    UI["Tauri + Svelte Flow"] --> API["Loopback /studio API"]
+    API --> REV["Immutable workflow revisions"]
+    API --> AG["Multimodal proposal agent"]
+    API --> EX["Dirty-node executor + cache"]
+    AG --> CHAT["genblaze_openai.chat"]
+    EX --> CAT["Provider catalog capabilities"]
+    CAT --> GEN["Genblaze pipelines"]
+    GEN --> B2["Backblaze B2 assets + manifests"]
+    EX --> COMP["composer.py only ffmpeg surface"]
+    API --> SQL["Local SQLite metadata"]
+    API --> KR["Windows Credential Manager"]
+```
+
 ```mermaid
 flowchart LR
     U["User or Brand Manager"] --> B["Creative Brief"]
@@ -84,6 +101,8 @@ sequenceDiagram
 - `app/thikra/orchestration.py` resolves catalog entries, executes the preserved pipeline, attaches Thikra context, persists asset records, and starts verification.
 - `app/thikra/storage.py` is the sole adapter for non-media JSON evidence; media goes through Genblaze's B2 sink.
 - `app/thikra/api.py` exposes typed operations; domain decisions live in services/state policy rather than Svelte.
+- `app/studio/` owns local projects, semantic revisions, canvas layout, proposals, imported assets, cost confirmation, node execution state, cache keys, and resumable execution events.
+- `app/repo/studio_runtime.py` compiles validated executable graph nodes using catalog entries without importing provider classes.
 
 ## State and money
 

@@ -55,6 +55,7 @@ CHAT, IMAGE, VIDEO, TTS, MUSIC = "chat", "image", "video", "tts", "music"
 
 # GMICloud Kling i2v renders 5s OR 10s clips only — any other `duration` 400s.
 KLING_GRID = (5.0, 10.0)
+SORA_GRID = (4.0, 8.0, 12.0)
 
 # Portable SDK transfer root; avoids the Genblaze Windows file-URI parser bug.
 OPENAI_IMAGE_TRANSFER_ROOT = Path("/tmp")
@@ -101,7 +102,7 @@ class CatalogEntry:
     default_model: str  # curated default (also the DTO fallback)
     suggested_models: tuple[str, ...]  # dropdown hints; free-text override allowed
     modality: Modality | None = None  # genblaze Modality for `.step()`; None for chat
-    make: Callable[[], BaseProvider] | None = None  # None => chat (special path)
+    make: Callable[[str | None], BaseProvider] | None = None  # optional Studio secret override
     image_handoff: str | None = None  # "external_inputs" | "image_kwarg" (video only)
     snap_durations: tuple[float, ...] | None = None  # video clip-length grid
 
@@ -142,7 +143,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
                 "google/imagen-4",
             ),
             modality=Modality.IMAGE,
-            make=lambda: ReplicateProvider(api_token=settings.replicate_api_token),
+            make=lambda secret=None: ReplicateProvider(api_token=secret or settings.replicate_api_token),
         ),
         "google": CatalogEntry(
             slot=IMAGE,
@@ -155,7 +156,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
                 "imagen-4.0-fast-generate-001",
             ),
             modality=Modality.IMAGE,
-            make=lambda: ImagenProvider(api_key=settings.google_api_key),
+            make=lambda secret=None: ImagenProvider(api_key=secret or settings.google_api_key),
         ),
         "openai": CatalogEntry(
             slot=IMAGE,
@@ -164,8 +165,8 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="gpt-image-1-mini",
             suggested_models=("gpt-image-1-mini", "gpt-image-1", "dall-e-3"),
             modality=Modality.IMAGE,
-            make=lambda: DalleProvider(
-                api_key=settings.openai_api_key,
+            make=lambda secret=None: DalleProvider(
+                api_key=secret or settings.openai_api_key,
                 output_dir=OPENAI_IMAGE_TRANSFER_ROOT,
             ),
         ),
@@ -179,7 +180,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
                 "stabilityai/stable-diffusion-3-5-large",
             ),
             modality=Modality.IMAGE,
-            make=lambda: NvidiaImageProvider(api_key=settings.nvidia_api_key),
+            make=lambda secret=None: NvidiaImageProvider(api_key=secret or settings.nvidia_api_key),
         ),
         "decart": CatalogEntry(
             slot=IMAGE,
@@ -188,7 +189,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="lucy-pro-t2i",
             suggested_models=("lucy-pro-t2i",),
             modality=Modality.IMAGE,
-            make=lambda: DecartImageProvider(api_key=settings.decart_api_key),
+            make=lambda secret=None: DecartImageProvider(api_key=secret or settings.decart_api_key),
         ),
     },
     # VIDEO — image-to-video (each keyframe → a clip). Handoff is
@@ -201,7 +202,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="minimax/video-01",
             suggested_models=("minimax/video-01", "kwaivgi/kling-v2.1", "wan-video/wan-2.5-i2v"),
             modality=Modality.VIDEO,
-            make=lambda: ReplicateProvider(api_token=settings.replicate_api_token),
+            make=lambda secret=None: ReplicateProvider(api_token=secret or settings.replicate_api_token),
             image_handoff="external_inputs",
         ),
         "gmicloud": CatalogEntry(
@@ -211,7 +212,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model=settings.gmi_video_model,
             suggested_models=("Kling-Image2Video-V2.1-Master", "pixverse-v5.6-i2v"),
             modality=Modality.VIDEO,
-            make=lambda: GMICloudVideoProvider(api_key=settings.gmi_api_key),
+            make=lambda secret=None: GMICloudVideoProvider(api_key=secret or settings.gmi_api_key),
             image_handoff="external_inputs",
             snap_durations=KLING_GRID,
         ),
@@ -226,7 +227,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
                 "veo-2.0-generate-001",
             ),
             modality=Modality.VIDEO,
-            make=lambda: VeoProvider(api_key=settings.google_api_key),
+            make=lambda secret=None: VeoProvider(api_key=secret or settings.google_api_key),
             image_handoff="external_inputs",
         ),
         "openai": CatalogEntry(
@@ -236,11 +237,12 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model=settings.video_model,
             suggested_models=("sora-2", "sora-2-pro"),
             modality=Modality.VIDEO,
-            make=lambda: _ThikraSoraProvider(
-                api_key=settings.openai_api_key,
+            make=lambda secret=None: _ThikraSoraProvider(
+                api_key=secret or settings.openai_api_key,
                 output_dir=OPENAI_IMAGE_TRANSFER_ROOT,
             ),
             image_handoff="external_inputs",
+            snap_durations=SORA_GRID,
         ),
         "runway": CatalogEntry(
             slot=VIDEO,
@@ -249,7 +251,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="gen4_turbo",
             suggested_models=("gen4_turbo", "gen3a_turbo"),
             modality=Modality.VIDEO,
-            make=lambda: RunwayProvider(api_secret=settings.runway_api_secret),
+            make=lambda secret=None: RunwayProvider(api_secret=secret or settings.runway_api_secret),
             image_handoff="external_inputs",
         ),
         "luma": CatalogEntry(
@@ -259,7 +261,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="ray-2",
             suggested_models=("ray-2", "ray-flash-2"),
             modality=Modality.VIDEO,
-            make=lambda: LumaProvider(auth_token=settings.luma_api_key),
+            make=lambda secret=None: LumaProvider(auth_token=secret or settings.luma_api_key),
             image_handoff="external_inputs",
         ),
         "nvidia": CatalogEntry(
@@ -269,7 +271,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="nvidia/cosmos-2.0-diffusion-video2world",
             suggested_models=("nvidia/cosmos-2.0-diffusion-video2world",),
             modality=Modality.VIDEO,
-            make=lambda: NvidiaVideoProvider(api_key=settings.nvidia_api_key),
+            make=lambda secret=None: NvidiaVideoProvider(api_key=secret or settings.nvidia_api_key),
             image_handoff="external_inputs",
         ),
         "decart": CatalogEntry(
@@ -283,7 +285,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="lucy-pro-i2v",
             suggested_models=("lucy-pro-i2v", "lucy-dev-i2v"),
             modality=Modality.VIDEO,
-            make=lambda: DecartVideoProvider(api_key=settings.decart_api_key),
+            make=lambda secret=None: DecartVideoProvider(api_key=secret or settings.decart_api_key),
             image_handoff="image_kwarg",
         ),
     },
@@ -296,7 +298,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="gpt-4o-mini-tts",
             suggested_models=("gpt-4o-mini-tts", "tts-1", "tts-1-hd"),
             modality=Modality.AUDIO,
-            make=lambda: OpenAITTSProvider(api_key=settings.openai_api_key),
+            make=lambda secret=None: OpenAITTSProvider(api_key=secret or settings.openai_api_key),
         ),
         "nvidia": CatalogEntry(
             slot=TTS,
@@ -305,7 +307,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model=settings.tts_model,
             suggested_models=("nvidia/magpie-tts-multilingual",),
             modality=Modality.AUDIO,
-            make=lambda: NvidiaAudioProvider(api_key=settings.nvidia_api_key),
+            make=lambda secret=None: NvidiaAudioProvider(api_key=secret or settings.nvidia_api_key),
         ),
         "elevenlabs": CatalogEntry(
             slot=TTS,
@@ -314,7 +316,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="eleven_multilingual_v2",
             suggested_models=("eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_v3"),
             modality=Modality.AUDIO,
-            make=lambda: ElevenLabsTTSProvider(api_key=settings.elevenlabs_api_key),
+            make=lambda secret=None: ElevenLabsTTSProvider(api_key=secret or settings.elevenlabs_api_key),
         ),
         "lmnt": CatalogEntry(
             slot=TTS,
@@ -323,7 +325,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="aurora",
             suggested_models=("aurora", "blizzard"),
             modality=Modality.AUDIO,
-            make=lambda: LMNTProvider(api_key=settings.lmnt_api_key),
+            make=lambda secret=None: LMNTProvider(api_key=secret or settings.lmnt_api_key),
         ),
         "hume": CatalogEntry(
             slot=TTS,
@@ -332,7 +334,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="octave-2",
             suggested_models=("octave-2", "octave-1"),
             modality=Modality.AUDIO,
-            make=lambda: HumeTTSProvider(api_key=settings.hume_api_key),
+            make=lambda secret=None: HumeTTSProvider(api_key=secret or settings.hume_api_key),
         ),
     },
     # MUSIC — instrumental score bed (Modality.AUDIO). GMICloud needs the
@@ -345,7 +347,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model="meta/musicgen",
             suggested_models=("meta/musicgen", "ardianfe/music-gen-fn-200e"),
             modality=Modality.AUDIO,
-            make=lambda: ReplicateProvider(api_token=settings.replicate_api_token),
+            make=lambda secret=None: ReplicateProvider(api_token=secret or settings.replicate_api_token),
         ),
         "gmicloud": CatalogEntry(
             slot=MUSIC,
@@ -354,8 +356,8 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             default_model=settings.music_model,
             suggested_models=("minimax-music-2.5",),
             modality=Modality.AUDIO,
-            make=lambda: GMICloudAudioProvider(
-                api_key=settings.gmi_api_key, models=_instrumental_music_registry()
+            make=lambda secret=None: GMICloudAudioProvider(
+                api_key=secret or settings.gmi_api_key, models=_instrumental_music_registry()
             ),
         ),
     },
@@ -390,6 +392,9 @@ def matrix() -> dict[str, list[dict]]:
                 "suggested_models": list(e.suggested_models),
                 "modality": e.modality.name.lower() if e.modality else "text",
                 "key_available": key_available(e),
+                "supports_seed": e.slot in {IMAGE, VIDEO},
+                "supports_reference_input": bool(e.image_handoff),
+                "duration_grid": list(e.snap_durations) if e.snap_durations else None,
             }
             for e in entries.values()
         ]

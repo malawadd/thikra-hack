@@ -113,7 +113,9 @@ def test_pipelines_line_budget() -> None:
     `is_instrumental` payload the default family allowlist drops).
     """
     lines = (APP_ROOT / "repo" / "pipelines.py").read_text().splitlines()
-    assert len(lines) < 460, f"pipelines.py is {len(lines)} lines — budget is 460"
+    # Bumped 460 → 510 for the Studio multimodal structured graph-proposal
+    # function. Provider classes remain confined to the catalog.
+    assert len(lines) < 510, f"pipelines.py is {len(lines)} lines — budget is 510"
 
 
 def test_composer_line_budget() -> None:
@@ -135,7 +137,10 @@ def test_composer_line_budget() -> None:
     narration from optional music without relying on fixed step positions.
     """
     lines = (APP_ROOT / "repo" / "composer.py").read_text().splitlines()
-    assert len(lines) < 570, f"composer.py is {len(lines)} lines — budget is 570"
+    # Bumped 570 → 650 for the Studio one-visual composition primitive. It
+    # reuses the same download, ffmpeg, hashing, and B2 boundaries rather than
+    # introducing a second media-processing surface.
+    assert len(lines) < 650, f"composer.py is {len(lines)} lines — budget is 650"
 
 
 def test_main_line_budget() -> None:
@@ -157,7 +162,9 @@ def test_main_line_budget() -> None:
     # Bumped 500 → 580 for the switchboard: GET /providers, the per-modality
     # selection resolver (`_resolve_choice`), and threading the resolved
     # provider entries into the three build_* calls + startup/health key dicts.
-    assert len(lines) < 580, f"main.py is {len(lines)} lines — budget is 580"
+    # Bumped 580 → 600 for the isolated Studio router registration and exact
+    # Tauri loopback origins. Studio endpoint logic remains outside main.py.
+    assert len(lines) < 600, f"main.py is {len(lines)} lines — budget is 600"
 
 
 def test_mcp_is_a_transport_over_the_gateway_facade() -> None:
@@ -208,4 +215,6 @@ def test_provider_catalog_line_budget() -> None:
     — push provider-construction logic into `make()` rather than new fields.
     """
     lines = (APP_ROOT / "repo" / "provider_catalog.py").read_text().splitlines()
-    assert len(lines) < 400, f"provider_catalog.py is {len(lines)} lines — budget is 400"
+    # Bumped 400 → 420 for serialized Studio capability metadata; provider
+    # construction remains one flat CatalogEntry per slot/vendor.
+    assert len(lines) < 420, f"provider_catalog.py is {len(lines)} lines — budget is 420"

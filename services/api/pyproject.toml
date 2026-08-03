@@ -33,6 +33,7 @@ dependencies = [
   "email-validator>=2.2,<3",
   "cryptography>=45,<47",
   "jsonschema>=4.23,<5",
+  "keyring>=25,<27",
   "mcp>=2,<3",
   "pillow>=11,<13",
   "psycopg[binary]>=3.2,<4",

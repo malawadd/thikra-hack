@@ -142,10 +142,11 @@ or `docs/features/composition.md` in the same change. If you touch
 `composer.py`, update `docs/features/composition.md`. The structural
 tests do not catch doc drift; reviewers do.
 
-### Rule 10: SvelteKit is the only active frontend
+### Rule 10: SvelteKit is the only active frontend architecture
 
-`apps/web` uses Svelte 5 and same-origin `/api` BFF routes. Do not import React,
-Next.js, provider SDKs, storage SDKs, or private environment variables there.
+`apps/web` and `apps/desktop` use Svelte 5. The web app uses same-origin `/api`
+BFF routes; the Tauri desktop uses the loopback `/studio` API. Do not import React,
+Next.js, provider SDKs, storage SDKs, or private environment variables in either.
 The archived `reference/next-web` is excluded from workspace commands and may
 be consulted only as migration history. `pnpm check:structure` enforces this.
 

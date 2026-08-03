@@ -1,5 +1,11 @@
 # Media generation
 
+> **Thikra Studio extension (2026-08-03):** the provider catalog now publishes seed, reference-input, duration-grid, credential, and image-handoff capabilities. Studio validates typed DAGs against this data before execution. `app/repo/studio_runtime.py` creates generic Genblaze pipelines from resolved catalog entries; provider classes remain confined to `provider_catalog.py`.
+
+OpenAI Sora advertises its supported 4/8/12-second grid to Studio. The desktop renders that grid as a duration dropdown and normalizes a stale duration when a look is pinned. Best-effort Genblaze runs with a failed step and no media assets are classified as node failures with the provider error; they are never marked succeeded and deferred into a misleading composition error.
+
+Studio image nodes create one to four independent variants. Reference images are sent only to the multimodal Look Director/agent, which emits structured text style guidance; this is visibly labeled agent-analyzed guidance and is not represented as direct image conditioning. Video generation preserves the real presigned image-to-video handoff declared by each catalog entry. Successful node outputs are keyed by semantic node version/configuration, provider/model, and upstream asset hashes, so moving a node never invalidates media.
+
 > **Thikra extension (2026-08-01):** outside DEMO,
 > `app/thikra/orchestration.py` executes this catalog-driven B0/B1/B2 path
 > after mandate, provider, and authorization checks. Confirmed planned-scene

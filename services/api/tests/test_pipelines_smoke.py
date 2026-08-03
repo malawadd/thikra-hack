@@ -31,6 +31,7 @@ from app.types.storyboard import Scene, StoryboardSpec
 # Resolved entries reused across tests (default models, empty keys at construct).
 IMAGE = pc.resolve("image", "google")
 VIDEO_GMI = pc.resolve("video", "gmicloud")  # has the 5/10s snap grid
+VIDEO_OPENAI = pc.resolve("video", "openai")
 VIDEO_REPLICATE = pc.resolve("video", "replicate")  # no grid (no-op snap)
 TTS = pc.resolve("tts", "nvidia")
 MUSIC = pc.resolve("music", "gmicloud")
@@ -132,6 +133,10 @@ def test_snap_scene_durations_quantizes_to_grid() -> None:
     assert [s.duration_sec for s in out.scenes] == [5.0, 10.0, 10.0]
     assert out.total_duration_sec == 25.0
     assert [s.duration_sec for s in spec.scenes] == [6.0, 8.0, 11.0]
+
+
+def test_sora_catalog_exposes_the_current_duration_grid() -> None:
+    assert VIDEO_OPENAI.snap_durations == (4.0, 8.0, 12.0)
 
 
 def test_snap_scene_durations_is_noop_without_grid() -> None:

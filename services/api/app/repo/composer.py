@@ -557,3 +557,61 @@ def compose_final(b2_run, b1_run, spec: StoryboardSpec, canvas: tuple[int, int] 
             sha256=_sha256(final_bytes),
             size_bytes=len(final_bytes),
         ), notices
+
+
+def compose_studio(
+    visual_url: str,
+    audio_urls: list[str],
+    *,
+    project_id: str,
+    execution_id: str,
+    duration_sec: float = 5.0,
+) -> Asset:
+    """Compose one graph-selected visual with optional audio tracks.
+
+    This intentionally small Studio primitive keeps every ffmpeg invocation in
+    the established composer boundary while the richer timeline remains out of
+    v1 scope.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg binary not found on PATH — see infra/README.md")
+    with tempfile.TemporaryDirectory(prefix="thikra-studio-compose-") as tmp_str:
+        tmp = Path(tmp_str)
+        visual_suffix = ".mp4" if visual_url.lower().split("?")[0].endswith(".mp4") else ".png"
+        visual = _download(visual_url, tmp / f"visual{visual_suffix}")
+        audio = [_download(url, tmp / f"audio-{index}.wav") for index, url in enumerate(audio_urls)]
+        output = tmp / "studio-final.mp4"
+        inputs: list[str] = []
+        if visual_suffix == ".mp4":
+            inputs.extend(["-i", str(visual)])
+        else:
+            inputs.extend(["-loop", "1", "-t", str(duration_sec), "-i", str(visual)])
+        for track in audio:
+            inputs.extend(["-i", str(track)])
+        args = [*inputs, "-map", "0:v:0", "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+        if audio:
+            labels = "".join(f"[{index + 1}:a]" for index in range(len(audio)))
+            args.extend(
+                [
+                    "-filter_complex",
+                    f"{labels}amix=inputs={len(audio)}:duration=longest:normalize=0[a]",
+                    "-map",
+                    "[a]",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                ]
+            )
+        else:
+            args.append("-an")
+        args.append(str(output))
+        _run_ffmpeg(args, stage="studio-compose")
+        payload = output.read_bytes()
+        key = f"studio/{project_id}/{execution_id}/final.mp4"
+        backend().put(key, payload, content_type="video/mp4")
+        return Asset(
+            url=backend().get_durable_url(key),
+            media_type="video/mp4",
+            sha256=_sha256(payload),
+            size_bytes=len(payload),
+        )

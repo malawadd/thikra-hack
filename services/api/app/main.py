@@ -49,6 +49,7 @@ from app.repo import (  # noqa: E402
 from app.repo import provider_catalog as catalog  # noqa: E402
 from app.repo.composer import compose_final  # noqa: E402
 from app.startup import application_lifespan  # noqa: E402
+from app.studio import router as studio_router  # noqa: E402
 from app.thikra import router as thikra_router  # noqa: E402
 from app.types.api import MediaRequest, PromptRequest, ProviderChoice  # noqa: E402
 
@@ -70,15 +71,18 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_origin_regex=(
-        None if settings.app_mode.upper() == "PRODUCTION" else r"https?://localhost(:\d+)?"
+        None
+        if settings.app_mode.upper() == "PRODUCTION"
+        else r"^(https?://localhost(:\d+)?|https?://tauri\.localhost|tauri://localhost)$"
     ),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Idempotency-Key"],
 )
 app.include_router(thikra_router)
 app.include_router(commerce_router)
 app.include_router(discovery_router)
+app.include_router(studio_router)
 app.mount("/mcp", mcp_app)
 app.middleware("http")(request_logging)
 

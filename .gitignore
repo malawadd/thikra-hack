@@ -11,6 +11,7 @@ node_modules/
 .turbo/
 dist/
 build/
+target/
 test-results/
 playwright-report/
 *.tsbuildinfo

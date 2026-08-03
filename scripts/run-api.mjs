@@ -9,7 +9,10 @@ const migration = spawnSync(uv, ['run', 'alembic', 'upgrade', 'head'], {
   cwd: api, stdio: 'inherit'
 });
 if (migration.status !== 0) process.exit(migration.status ?? 1);
-const child = spawn(uv, ['run', 'uvicorn', 'app.main:app', '--reload', '--port', process.env.API_PORT || '43192'], {
+const child = spawn(uv, [
+  'run', 'uvicorn', 'app.main:app', '--reload', '--reload-dir', 'app',
+  '--host', '127.0.0.1', '--port', process.env.API_PORT || '43192'
+], {
   cwd: api, stdio: 'inherit'
 });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));

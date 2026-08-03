@@ -1,0 +1,39 @@
+{
+  "name": "@thikra/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "cargo fetch --manifest-path src-tauri/Cargo.toml",
+    "dev": "tauri dev",
+    "dev:renderer": "vite dev --port 43193",
+    "build": "vite build",
+    "build:desktop": "tauri build",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "pnpm check",
+    "test": "vitest run src",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@xyflow/svelte": "^1.6.2",
+    "lucide-svelte": "^0.468.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.16.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "eslint-plugin-svelte": "^3.2.0",
+    "globals": "^15.14.0",
+    "svelte": "^5.16.0",
+    "svelte-check": "^4.1.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vite": "^6.0.5",
+    "vitest": "^3.2.4"
+  }
+}

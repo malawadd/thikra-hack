@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const active = path.join(root, 'apps', 'web', 'src');
+const activeRoots = [path.join(root, 'apps', 'web', 'src'), path.join(root, 'apps', 'desktop', 'src')];
 const extensions = new Set(['.ts', '.js', '.svelte']);
 const files = [];
 function walk(directory) {
@@ -13,7 +13,7 @@ function walk(directory) {
     else if (extensions.has(path.extname(entry.name))) files.push(target);
   }
 }
-walk(active);
+for (const active of activeRoots) if (fs.existsSync(active)) walk(active);
 const rules = [
   { label: 'React/Next import', pattern: /(?:from\s+['"](?:react|next(?:\/|['"]))|require\(['"](?:react|next))/ },
   { label: 'provider SDK in browser', pattern: /from\s+['"](?:openai|replicate|runwayml|@google\/genai)/ },
@@ -30,4 +30,4 @@ if (offenders.length) {
   console.error(offenders.join('\n'));
   process.exit(1);
 }
-console.log(`Active SvelteKit structure verified (${files.length} source files).`);
+console.log(`Active SvelteKit web + desktop structure verified (${files.length} source files).`);

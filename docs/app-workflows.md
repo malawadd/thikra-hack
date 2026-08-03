@@ -1,9 +1,37 @@
 # App workflows
 
+## Desktop creative workflow
+
+Thikra Studio stores a semantic graph snapshot (`schema_version`, nodes, edges) in every immutable revision. Canvas positions and viewport are separate, so visual organization does not invalidate cached generation. The desktop asks for an estimate after the last semantic edit, requires an explicit confirmation, and then consumes resumable `/studio/executions/{id}/events` SSE envelopes.
+
+The agent receives the current revision, selected nodes, prompts, saved annotations, and up to four selected reference/output assets. It returns typed operations and rationale—not chain-of-thought—and cannot mutate or execute the graph. Users selectively approve operations; dependency closure keeps connected operations consistent, and stale proposals fail with `409`.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Desktop as Tauri Studio
+    participant API as Loopback FastAPI
+    participant Agent as OpenAI catalog chat
+    participant Runtime as Genblaze runtime
+    participant B2
+    User->>Desktop: Edit graph and references
+    Desktop->>API: Save semantic revision
+    Desktop->>API: Request proposal + selected assets
+    API->>Agent: Multimodal structured request
+    Agent-->>Desktop: Typed ghost operations
+    User->>Desktop: Approve selected operations
+    Desktop->>API: Apply once as new revision
+    Desktop->>API: Estimate
+    User->>Desktop: Confirm cost and run
+    API->>Runtime: Execute dirty DAG branches
+    Runtime->>B2: Assets and manifests
+    API-->>Desktop: Resumable per-node SSE
+```
+
 ## One prompt → final MP4
 
 ```
-User                Web (Next.js)              FastAPI                Genblaze + Providers              B2
+User                Web (SvelteKit)             FastAPI                Genblaze + Providers              B2
  │                       │                        │                            │                        │
  │ "how LLMs think       │                        │                            │                        │
  │  step by step"        │                        │                            │                        │
@@ -56,13 +84,7 @@ User                Web (Next.js)              FastAPI                Genblaze +
 
 ### Surviving a reload
 
-Studio run state lives client-side (`StudioPage`), so it's snapshotted to
-`sessionStorage` (`lib/run-store.ts`) and restored on mount. A reload of a
-completed or awaiting-approval run brings the canvas back intact. Because media
-generation streams from a single request, a reload *mid-stream* can't resume the
-stream — the restore flips the run to an "Interrupted" error with a retry, and
-any steps that finished are already durable in B2 (see Lineage below). A
-`beforeunload` guard warns before a reload discards an in-flight, paid run.
+Web run state uses the persisted FastAPI run records and stable SSE cursor. Desktop execution state is fully server persisted: reconnecting to the event stream resumes after the last event ID, deduplicates stable IDs, and marks work left running across a backend restart as interrupted instead of silently restarting paid calls. A failed or cancelled Studio run can then be resumed as a new lineage-linked execution after the user confirms a fresh remaining-work estimate. Completed parent nodes and durable provider-completion checkpoints are reused.
 
 ## Lineage in B2
 

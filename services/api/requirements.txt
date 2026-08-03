@@ -167,6 +167,12 @@ idna==3.18
     #   httpx2
     #   requests
     #   yarl
+jaraco-classes==3.4.0
+    # via keyring
+jaraco-context==6.1.2
+    # via keyring
+jaraco-functools==4.6.0
+    # via keyring
 jiter==0.15.0
     # via openai
 jmespath==1.1.0
@@ -179,6 +185,8 @@ jsonschema==4.26.0
     #   mcp
 jsonschema-specifications==2025.9.1
     # via jsonschema
+keyring==25.7.0
+    # via genblaze-gen-media-multi-provider-sample-api (pyproject.toml)
 lmnt==2.13.0
     # via genblaze-lmnt
 lumaai==1.21.0
@@ -191,6 +199,10 @@ mcp==2.0.0
     # via genblaze-gen-media-multi-provider-sample-api (pyproject.toml)
 mcp-types==2.0.0
     # via mcp
+more-itertools==11.1.0
+    # via
+    #   jaraco-classes
+    #   jaraco-functools
 multidict==6.7.1
     # via
     #   aiohttp
@@ -263,6 +275,8 @@ python-multipart==0.0.29
     #   mcp
 pywin32==312
     # via mcp
+pywin32-ctypes==0.2.3
+    # via keyring
 pyyaml==6.0.3
     # via uvicorn
 referencing==0.37.0

@@ -34,6 +34,7 @@ from genblaze_s3 import S3StorageBackend
 from app.config import settings
 from app.repo.genblaze_windows_compat import install_windows_file_uri_compat
 from app.repo.provider_catalog import CatalogEntry
+from app.studio.schemas import WorkflowGraph, WorkflowProposalOutput
 from app.types.mandate import MandateProposal
 from app.types.storyboard import StoryboardSpec
 
@@ -43,6 +44,43 @@ PREFIX = "explainers"
 logger = logging.getLogger("api.pipelines")
 
 install_windows_file_uri_compat()
+
+
+def generate_workflow_proposal(
+    prompt: str,
+    graph: WorkflowGraph,
+    selected_node_ids: list[str],
+    asset_urls: list[str],
+    annotations: list[dict] | None = None,
+    *,
+    api_key: str | None = None,
+) -> WorkflowProposalOutput:
+    """Return a visible, reviewable Studio graph patch; never execute it."""
+    content: list[dict] = [
+        {
+            "type": "text",
+            "text": (
+                f"User direction: {prompt}\nSelected node ids: {selected_node_ids}\n"
+                f"Explicit user annotations: {json.dumps(annotations or [], ensure_ascii=False)}\n"
+                f"Current graph: {json.dumps(graph.model_dump(mode='json'))}"
+            ),
+        }
+    ]
+    content.extend(
+        {"type": "image_url", "image_url": {"url": url, "detail": "low"}}
+        for url in asset_urls[:4]
+    )
+    response = chat(
+        settings.chat_model,
+        messages=[{"role": "user", "content": content}],
+        system=(
+            "You are Thikra Studio's creative workflow editor. Propose the smallest useful "
+            "typed graph patch. Never claim to execute work and never expose private reasoning."
+        ),
+        response_format=WorkflowProposalOutput,
+        api_key=api_key,
+    )
+    return WorkflowProposalOutput.model_validate_json(response.text)
 
 
 # --- Backend + sink singletons ----------------------------------------------
