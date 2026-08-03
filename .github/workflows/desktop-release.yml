@@ -1,0 +1,56 @@
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows installers
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and publish Thikra Studio
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: v__VERSION__
+          releaseName: Thikra Studio v__VERSION__
+          releaseBody: |
+            Windows installers for Thikra Studio.
+
+            This milestone includes the layered timeline, vertical clip movement,
+            draggable compositing tracks, and direct move/resize/rotate controls in
+            the program monitor.
+
+            The local FastAPI service and ffmpeg must still be installed and launched
+            separately for this milestone.
+          releaseDraft: false
+          prerelease: false
