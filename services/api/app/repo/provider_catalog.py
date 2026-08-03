@@ -105,6 +105,7 @@ class CatalogEntry:
     make: Callable[[str | None], BaseProvider] | None = None  # optional Studio secret override
     image_handoff: str | None = None  # "external_inputs" | "image_kwarg" (video only)
     snap_durations: tuple[float, ...] | None = None  # video clip-length grid
+    supports_text_only: bool = False  # video generation without a reference image
 
 
 # --- The catalog: {slot: {vendor: CatalogEntry}} ----------------------------
@@ -204,6 +205,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             modality=Modality.VIDEO,
             make=lambda secret=None: ReplicateProvider(api_token=secret or settings.replicate_api_token),
             image_handoff="external_inputs",
+            supports_text_only=True,
         ),
         "gmicloud": CatalogEntry(
             slot=VIDEO,
@@ -243,6 +245,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             ),
             image_handoff="external_inputs",
             snap_durations=SORA_GRID,
+            supports_text_only=True,
         ),
         "runway": CatalogEntry(
             slot=VIDEO,
@@ -263,6 +266,7 @@ CATALOG: dict[str, dict[str, CatalogEntry]] = {
             modality=Modality.VIDEO,
             make=lambda secret=None: LumaProvider(auth_token=secret or settings.luma_api_key),
             image_handoff="external_inputs",
+            supports_text_only=True,
         ),
         "nvidia": CatalogEntry(
             slot=VIDEO,
@@ -394,9 +398,43 @@ def matrix() -> dict[str, list[dict]]:
                 "key_available": key_available(e),
                 "supports_seed": e.slot in {IMAGE, VIDEO},
                 "supports_reference_input": bool(e.image_handoff),
+                "supports_text_only": e.supports_text_only,
                 "duration_grid": list(e.snap_durations) if e.snap_durations else None,
             }
             for e in entries.values()
         ]
         for slot, entries in CATALOG.items()
     }
+
+
+def transcribe_audio(path: Path, secret: str, language: str | None = None) -> list[dict]:
+    """OpenAI transcription adapter; provider HTTP stays in the catalog boundary."""
+    import httpx
+
+    data: list[tuple[str, str]] = [
+        ("model", "whisper-1"),
+        ("response_format", "verbose_json"),
+        ("timestamp_granularities[]", "segment"),
+    ]
+    if language:
+        data.append(("language", language))
+    with path.open("rb") as source:
+        response = httpx.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {secret}"},
+            data=data,
+            files={"file": (path.name, source, "audio/wav")},
+            timeout=300,
+        )
+    response.raise_for_status()
+    result = response.json()
+    return [
+        {
+            "id": f"cue-{index + 1}",
+            "start_ms": round(float(segment["start"]) * 1000),
+            "end_ms": round(float(segment["end"]) * 1000),
+            "text": str(segment["text"]).strip(),
+        }
+        for index, segment in enumerate(result.get("segments", []))
+        if str(segment.get("text", "")).strip()
+    ]

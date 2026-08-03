@@ -8,6 +8,8 @@
 
 > **Thikra Studio extension (2026-08-03):** `compose_studio()` accepts the graph's ordered selected visual and optional audio assets, performs the local download/mux work, uploads the result through `genblaze-s3`, and returns the original Genblaze `Asset`. The Studio executor calls it through `asyncio.to_thread`. This keeps all ffmpeg/ffprobe calls inside this module and does not introduce a response wrapper.
 
+> **Multi-track editor extension:** `prepare_studio_asset()` owns ffprobe analysis plus thumbnail/proxy/waveform generation. `render_studio_sequence()` consumes an immutable sequence snapshot, layers normalized visual and title/caption clips, trims and mixes audio, emits progress from ffmpeg's machine-readable progress stream, and uploads the MP4/SRT through the existing storage backend. Cancellation terminates only the owned encoder process. These functions deliberately remain in `composer.py`, preserving it as the sole ffmpeg-family subprocess surface.
+
 The final-MP4 step is the only non-Genblaze media surface in this
 sample. It exists because the SDK does not yet ship a composition
 primitive — `genblaze-ffmpeg`, `genblaze-compose`, and `genblaze-video`
@@ -16,7 +18,7 @@ all 404 on PyPI as of 2026-05-28. The composer falls back to the system
 
 ## Module
 
-`services/api/app/repo/composer.py` — < 520 lines.
+`services/api/app/repo/composer.py` — guarded at < 1050 lines after adding editor media preparation, audible-mix extraction, and multi-track rendering.
 
 It lives under `repo/` because it's storage-adjacent: it downloads
 source assets from B2 via the same `S3StorageBackend` instance the

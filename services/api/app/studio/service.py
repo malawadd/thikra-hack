@@ -29,10 +29,18 @@ from app.studio.graph import (
 from app.studio.models import (
     AgentProposal,
     NodeExecution,
+    SequenceAgentProposal,
+    SequenceRevision,
     StudioAnnotation,
     StudioAsset,
+    StudioCaptionJob,
     StudioExecutionEvent,
+    StudioGenerationJob,
+    StudioJobEvent,
     StudioProject,
+    StudioRender,
+    StudioRenderEvent,
+    StudioSequence,
     WorkflowExecution,
     WorkflowRevision,
 )
@@ -56,8 +64,8 @@ NODE_COST_MINOR = {
 }
 MEDIA_LIMITS = {
     "image": (25 * 1024 * 1024, {"image/png", "image/jpeg", "image/webp"}),
-    "audio": (100 * 1024 * 1024, {"audio/wav", "audio/x-wav", "audio/mpeg"}),
-    "video": (500 * 1024 * 1024, {"video/mp4", "video/webm"}),
+    "audio": (100 * 1024 * 1024, {"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/m4a"}),
+    "video": (500 * 1024 * 1024, {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v"}),
 }
 KEYRING_SERVICE = "thikra-studio"
 VENDOR_SETTING = {
@@ -175,6 +183,19 @@ def delete_project(db: Session, project: StudioProject) -> None:
     )
     if running:
         raise RuntimeError("PROJECT_EXECUTION_ACTIVE")
+    active_editor = db.scalar(
+        select(func.count()).select_from(StudioRender).where(
+            StudioRender.project_id == project.id,
+            StudioRender.status.in_({"QUEUED", "RUNNING"}),
+        )
+    ) or db.scalar(
+        select(func.count()).select_from(StudioGenerationJob).where(
+            StudioGenerationJob.project_id == project.id,
+            StudioGenerationJob.status.in_({"QUEUED", "RUNNING"}),
+        )
+    )
+    if active_editor:
+        raise RuntimeError("PROJECT_EDITOR_JOB_ACTIVE")
 
     execution_ids = select(WorkflowExecution.id).where(
         WorkflowExecution.project_id == project.id
@@ -183,6 +204,22 @@ def delete_project(db: Session, project: StudioProject) -> None:
     db.execute(delete(NodeExecution).where(NodeExecution.execution_id.in_(execution_ids)))
     db.execute(delete(WorkflowExecution).where(WorkflowExecution.project_id == project.id))
     db.execute(delete(StudioAnnotation).where(StudioAnnotation.project_id == project.id))
+    sequence_ids = select(StudioSequence.id).where(StudioSequence.project_id == project.id)
+    revision_ids = select(SequenceRevision.id).where(SequenceRevision.sequence_id.in_(sequence_ids))
+    render_ids = select(StudioRender.id).where(StudioRender.project_id == project.id)
+    generation_ids = select(StudioGenerationJob.id).where(StudioGenerationJob.project_id == project.id)
+    caption_ids = select(StudioCaptionJob.id).where(StudioCaptionJob.project_id == project.id)
+    db.execute(delete(StudioRenderEvent).where(StudioRenderEvent.render_id.in_(render_ids)))
+    db.execute(delete(StudioJobEvent).where(
+        ((StudioJobEvent.job_kind == "generation") & StudioJobEvent.job_id.in_(generation_ids))
+        | ((StudioJobEvent.job_kind == "caption") & StudioJobEvent.job_id.in_(caption_ids))
+    ))
+    db.execute(delete(StudioRender).where(StudioRender.project_id == project.id))
+    db.execute(delete(StudioGenerationJob).where(StudioGenerationJob.project_id == project.id))
+    db.execute(delete(StudioCaptionJob).where(StudioCaptionJob.project_id == project.id))
+    db.execute(delete(SequenceAgentProposal).where(SequenceAgentProposal.sequence_id.in_(sequence_ids)))
+    db.execute(delete(SequenceRevision).where(SequenceRevision.id.in_(revision_ids)))
+    db.execute(delete(StudioSequence).where(StudioSequence.project_id == project.id))
     db.execute(delete(StudioAsset).where(StudioAsset.project_id == project.id))
     db.execute(delete(AgentProposal).where(AgentProposal.project_id == project.id))
     db.execute(delete(WorkflowRevision).where(WorkflowRevision.project_id == project.id))
@@ -805,6 +842,10 @@ def _demo_svg(project_id: str, execution_id: str, node_id: str, variant: int, pr
         local_path=str(path),
         size=len(payload),
         sha256=hashlib.sha256(payload).hexdigest(),
+        source_kind="GENERATED",
+        width=1280,
+        height=720,
+        analysis_status="READY",
     )
 
 
@@ -852,6 +893,8 @@ def _persist_asset_descriptors(
             remote_url=url,
             size=int(asset.get("size_bytes", 0) or 0),
             sha256=str(asset.get("sha256") or hashlib.sha256(url.encode()).hexdigest()),
+            source_kind="GENERATED",
+            origin_node_id=node_id,
         )
         db.add(record)
         db.flush()

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 
 os.environ.setdefault("B2_BUCKET_NAME", "_")
 os.environ.setdefault("B2_REGION", "us-west-004")
@@ -31,6 +32,104 @@ SCENE_URLS = [f"{_B2_HOST}/{_RUN_PREFIX}/step-{i:02d}/scene.mp4" for i in range(
 NARRATION_URLS = [f"{_B2_HOST}/{_RUN_PREFIX}/step-{i:02d}/narration.wav" for i in range(3)]
 KEYFRAME_URLS = [f"{_B2_HOST}/{_RUN_PREFIX}/kf-{i:02d}/keyframe.png" for i in range(3)]
 MUSIC_URL = f"{_B2_HOST}/{_RUN_PREFIX}/step-music/track.wav"
+
+
+def test_editor_render_layers_transforms_audio_captions_and_srt(tmp_path: Path) -> None:
+    still = tmp_path / "still.png"
+    Image.new("RGB", (640, 480), "#553399").save(still)
+    document = {
+        "schema_version": 1,
+        "preset": "landscape_720",
+        "background": "#05070a",
+        "duck_music_under_narration": True,
+        "tracks": [
+            {"id": "v1", "kind": "visual", "order": 0},
+            {"id": "captions", "kind": "caption", "order": 1},
+        ],
+        "clips": [
+            {
+                "id": "visual",
+                "track_id": "v1",
+                "kind": "image",
+                "asset_id": "asset",
+                "start_ms": 0,
+                "duration_ms": 2000,
+                "source_in_ms": 0,
+                "transition_in": "dissolve",
+                "transition_out": "fade_black",
+                "transition_duration_ms": 300,
+                "transform": {
+                    "fit": "fill",
+                    "position_x": 0.4,
+                    "position_y": 0.6,
+                    "scale": 1.1,
+                    "rotation": 2,
+                    "opacity": 0.9,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                    "ken_burns": True,
+                },
+                "audio": {
+                    "gain_db": 0,
+                    "muted": False,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                    "role": "source",
+                },
+            },
+            {
+                "id": "caption",
+                "track_id": "captions",
+                "kind": "caption",
+                "start_ms": 200,
+                "duration_ms": 1200,
+                "source_in_ms": 0,
+                "transition_in": "cut",
+                "transition_out": "cut",
+                "transition_duration_ms": 0,
+                "transform": {"opacity": 1, "fade_in_ms": 100, "fade_out_ms": 100},
+                "text": {
+                    "content": "أهلاً · Welcome",
+                    "font_family": "Noto Sans Arabic",
+                    "font_size": 48,
+                    "font_weight": 700,
+                    "color": "#ffffff",
+                    "background": "#00000099",
+                    "align": "center",
+                    "position_x": 0.5,
+                    "position_y": 0.86,
+                },
+            },
+        ],
+    }
+    fake_backend = MagicMock()
+    fake_backend.get_durable_url.side_effect = lambda key: f"https://b2.test/{key}"
+    calls = []
+
+    def fake_run(args, duration_ms, on_progress, cancelled):
+        calls.append(args)
+        Path(args[-1]).write_bytes(b"editor-mp4")
+
+    with (
+        patch.object(composer, "backend", return_value=fake_backend),
+        patch.object(composer, "_run_editor_ffmpeg", side_effect=fake_run),
+        patch.object(composer.shutil, "which", return_value="ffmpeg"),
+    ):
+        video, srt = composer.render_studio_sequence(
+            document,
+            {"asset": {"path": str(still), "content_type": "image/png", "has_audio": False}},
+            (1280, 720),
+            project_id="project",
+            render_id="render",
+            on_progress=lambda *_args: None,
+            cancelled=lambda: False,
+        )
+    graph = calls[0][calls[0].index("-filter_complex") + 1]
+    assert "zoompan=" in graph and "rotate=" in graph and "overlay=(W-w)*0.4" in graph
+    assert "anullsrc" in graph  # exported MP4 always includes an AAC track
+    assert video.media_type == "video/mp4"
+    assert srt is not None and srt.media_type == "application/x-subrip"
+    assert fake_backend.put.call_count == 2
 
 
 def _make_spec(n: int = 3) -> StoryboardSpec:
@@ -176,9 +275,7 @@ def test_group_scenes_uses_media_type_when_b2_steps_are_reordered(tmp_path: Path
     narration = _step(NARRATION_URLS[0])
     narration.assets[0].metadata = {"audio_type": "speech"}
     b2_run = SimpleNamespace(
-        run=SimpleNamespace(
-            steps=[narration, _step(SCENE_URLS[0])], run_id="test-run-id"
-        ),
+        run=SimpleNamespace(steps=[narration, _step(SCENE_URLS[0])], run_id="test-run-id"),
         manifest=SimpleNamespace(manifest_uri="https://b/manifests/test.json"),
     )
     fake = MagicMock()

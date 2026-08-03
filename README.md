@@ -22,6 +22,7 @@ The responsive command center is also verified at a 390×844 mobile viewport: [m
 - B2 media metadata, lineage, hashes, server-side short-lived downloads, and one evidence JSON adapter.
 - SSE with stable envelopes, deterministic IDs, resume cursor, deduplication, reconnect backoff, and polling fallback.
 - Paid-workflow resume from failed/cancelled nodes with a fresh remaining-cost confirmation, parent execution lineage, and durable provider-output recovery.
+- Generate/Edit desktop workspaces with a shared asset bin, independently versioned multi-track sequences, proxy preview, titles/captions/audio, resumable render progress, B2 exports, and narrow native Windows Save As.
 - Layered verification records, with real Pillow/ffprobe inspection for non-demo delivery.
 - Backend-enforced retry budgets, approval/rejection policy, redress cases, and a tamper-evident SHA-256 audit chain.
 - Complete Overview, New Brief, Runs, Asset Library, Evidence, Payments, Cases, and Integrations routes.
@@ -51,7 +52,7 @@ pnpm setup:desktop
 pnpm dev:desktop
 ```
 
-This milestone launches the Tauri shell, the static Svelte renderer, and the loopback FastAPI service together. It does not bundle Python or ffmpeg yet. Studio project metadata remains local, provider overrides are stored in Windows Credential Manager, and generated production media continues to use configured B2 storage. See [Thikra Studio](docs/features/desktop-studio.md).
+This launches the Tauri shell, the static Svelte renderer, and the loopback FastAPI service together. The desktop includes the ComfyUI-inspired Generate canvas and a short-form multi-track Edit workspace. It does not bundle Python or ffmpeg yet. Studio project/sequence metadata and editing proxies remain local; provider overrides are stored in Windows Credential Manager; generated and rendered production media continues to use configured B2 storage. See [Thikra Studio](docs/features/desktop-studio.md).
 
 ## Runtime modes
 

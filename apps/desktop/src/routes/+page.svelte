@@ -4,11 +4,13 @@
   import { addEdge, Background, BackgroundVariant, Controls, MiniMap, SvelteFlow, SvelteFlowProvider, type Connection, type Edge, type Node } from '@xyflow/svelte';
   import { Bot, Check, ChevronDown, CircleDollarSign, CloudOff, Command, Film, FolderOpen, History, ImagePlus, KeyRound, LoaderCircle, PanelRightClose, Play, Plus, Redo2, Save, Settings, Sparkles, Trash2, Undo2, X } from 'lucide-svelte';
   import StudioNode from '$lib/StudioNode.svelte';
+  import EditorWorkspace from '$lib/EditorWorkspace.svelte';
   import { api, ApiError, assetUrl, studioEvents } from '$lib/api';
   import { fromFlow, operationClosure, PORTS, toFlowEdges, toFlowNodes, validateConnection } from '$lib/graph';
   import type { CatalogNode, Estimate, Execution, NodeStatus, Project, Proposal, ProviderConnection, ProviderMatrix, Revision, StudioAsset, StudioEvent, WorkflowNode } from '$lib/types';
 
   let online = false, loading = true, saving = false, running = false, inspectorOpen = true;
+  let workspaceMode: 'generate' | 'edit' = 'generate';
   let error = '', notice = '';
   let project: Project | null = null;
   let catalog: CatalogNode[] = [];
@@ -276,6 +278,7 @@
     <header class="titlebar">
       <div class="brand"><span class="brand-mark"><Sparkles size={16} /></span><strong>Thikra Studio</strong><em>LOCAL</em></div>
       <button class="project-switch" onclick={openSettings}><FolderOpen size={15} /><span>{project?.name}</span><ChevronDown size={13} /></button>
+      <nav class="workspace-tabs" aria-label="Workspace"><button class:active={workspaceMode==='generate'} onclick={()=>workspaceMode='generate'}>Generate</button><button class:active={workspaceMode==='edit'} onclick={()=>workspaceMode='edit'}>Edit</button></nav>
       <div class="title-actions">
         <button class="icon-btn" title="Undo" onclick={undo} disabled={historyIndex <= 0}><Undo2 size={16} /></button>
         <button class="icon-btn" title="Redo" onclick={redo} disabled={historyIndex >= history.length - 1}><Redo2 size={16} /></button>
@@ -283,6 +286,8 @@
         <button class="icon-btn" title="Toggle inspector" onclick={() => inspectorOpen = !inspectorOpen}><PanelRightClose size={16} /></button>
       </div>
     </header>
+
+    {#if workspaceMode === 'edit' && project}<EditorWorkspace projectId={project.id} projectName={project.name} {providerMatrix} onAssetsChanged={()=>loadProjectAssets(project!.id)} />{/if}
 
     <aside class="left-rail">
       <button class="new-node" onclick={() => showLibrary = !showLibrary}><Plus size={16} /> Add node</button>

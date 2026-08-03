@@ -40,17 +40,17 @@
   <aside class:open={menuOpen} class="sidebar" aria-label="Primary navigation">
     <div class="brand">
       <div class="brand-mark"><Sparkles size={21} /></div>
-      <div><strong>Thikra</strong><small>Creative commerce</small></div>
+      <div class="brand-copy"><strong>Thikra</strong><small>Creative commerce</small></div>
     </div>
     <nav class="nav">
       {#each nav as item}
         <a href={item.href} class:active={active(item.href)} onclick={(event) => { event.preventDefault(); navigate(item.href); }}>
-          <item.icon size={18} /><span>{item.label}</span>
+          <span class="nav-icon"><item.icon size={17} /></span><span>{item.label}</span>
         </a>
       {/each}
     </nav>
     <div class="sidebar-foot">
-      <strong><ShieldCheck size={14} style="display:inline;vertical-align:-2px" /> {mode} environment</strong>
+      <strong class="sidebar-foot-head"><ShieldCheck size={14} /> {mode} environment</strong>
       <p>{mode === 'DEMO' ? 'Payment and generation fixtures are simulated and visibly labeled. No real transaction is claimed.' : 'Configured integrations are used through server-only credentials and bounded policy.'}</p>
     </div>
   </aside>
@@ -59,8 +59,8 @@
       <button class="mobile-menu" aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} onclick={() => menuOpen = !menuOpen}>
         {#if menuOpen}<X size={22} />{:else}<Menu size={22} />{/if}
       </button>
-      <div class="env"><span class="pulse" class:offline={!backendReady}></span>{backendReady ? 'Backend evidence online' : 'Backend unavailable'}</div>
-      <div class="actions"><span class="badge" data-tone="info"><ScrollText size={12} /> Audit chain active</span></div>
+      <div class="env topbar-status"><span class="pulse" class:offline={!backendReady}></span>{backendReady ? 'Backend evidence online' : 'Backend unavailable'}</div>
+      <div class="actions topbar-assurance"><span class="badge" data-tone="info"><ScrollText size={12} /> Audit chain active</span></div>
     </div>
     <div class="content">{@render children()}</div>
   </main>

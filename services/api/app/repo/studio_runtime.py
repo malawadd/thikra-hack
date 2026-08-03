@@ -52,7 +52,7 @@ def generate_videos(
     entry: CatalogEntry,
     model: str,
     prompt: str,
-    image_url: str,
+    image_url: str | None,
     variants: int,
     duration_sec: float,
     secret: str,
@@ -63,7 +63,7 @@ def generate_videos(
         max_concurrency=min(variants, 3),
         preflight=False,
     )
-    image_ref = presign_asset_url(image_url)
+    image_ref = presign_asset_url(image_url) if image_url else None
     for _ in range(variants):
         kwargs = {
             "model": model,
@@ -71,9 +71,9 @@ def generate_videos(
             "prompt": prompt,
             "duration": duration_sec,
         }
-        if entry.image_handoff == "external_inputs":
+        if image_ref and entry.image_handoff == "external_inputs":
             kwargs["external_inputs"] = [Asset(url=image_ref, media_type="image/png")]
-        else:
+        elif image_ref:
             kwargs["image"] = image_ref
         pipeline = pipeline.step(provider, **kwargs)
     return pipeline.run(

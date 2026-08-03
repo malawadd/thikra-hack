@@ -34,7 +34,12 @@ from genblaze_s3 import S3StorageBackend
 from app.config import settings
 from app.repo.genblaze_windows_compat import install_windows_file_uri_compat
 from app.repo.provider_catalog import CatalogEntry
-from app.studio.schemas import WorkflowGraph, WorkflowProposalOutput
+from app.studio.schemas import (
+    SequenceDocument,
+    SequenceProposalOutput,
+    WorkflowGraph,
+    WorkflowProposalOutput,
+)
 from app.types.mandate import MandateProposal
 from app.types.storyboard import StoryboardSpec
 
@@ -81,6 +86,36 @@ def generate_workflow_proposal(
         api_key=api_key,
     )
     return WorkflowProposalOutput.model_validate_json(response.text)
+
+
+def generate_sequence_proposal(
+    prompt: str,
+    document: SequenceDocument,
+    selected_clip_ids: list[str],
+    *,
+    api_key: str | None = None,
+) -> SequenceProposalOutput:
+    """Return a typed, reviewable timeline patch without mutating or rendering."""
+    response = chat(
+        settings.chat_model,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"User edit direction: {prompt}\nSelected clip ids: {selected_clip_ids}\n"
+                    f"Current sequence: {json.dumps(document.model_dump(mode='json'), ensure_ascii=False)}"
+                ),
+            }
+        ],
+        system=(
+            "You are Thikra Studio's short-form video editor. Propose the smallest useful "
+            "typed timeline patch. Preserve source assets, return concise rationale, never "
+            "claim to render, and never reveal private reasoning."
+        ),
+        response_format=SequenceProposalOutput,
+        api_key=api_key,
+    )
+    return SequenceProposalOutput.model_validate_json(response.text)
 
 
 # --- Backend + sink singletons ----------------------------------------------

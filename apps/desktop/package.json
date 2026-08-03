@@ -15,6 +15,9 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@fontsource/noto-sans": "^5.2.8",
+    "@fontsource/noto-sans-arabic": "^5.2.8",
+    "@fontsource/noto-serif": "^5.2.8",
     "@tauri-apps/api": "^2.11.1",
     "@xyflow/svelte": "^1.6.2",
     "lucide-svelte": "^0.468.0"

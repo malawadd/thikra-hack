@@ -1,6 +1,6 @@
 # Thikra Studio
 
-Thikra Studio is the local, Windows-first creative workflow surface. It combines a ComfyUI-inspired typed node canvas with reversible agent proposals, explicit variant selection, reference-led look development, cost confirmation, and incremental Genblaze execution.
+Thikra Studio is the local, Windows-first creative workflow surface. **Generate** combines a ComfyUI-inspired typed node canvas with reversible agent proposals, explicit variant selection, reference-led look development, cost confirmation, and incremental Genblaze execution. **Edit** is a non-destructive multi-track video editor using the same project asset library.
 
 ## Milestone scope
 
@@ -10,6 +10,16 @@ Thikra Studio is the local, Windows-first creative workflow surface. It combines
 - Generated production assets and Genblaze manifests remain in configured B2 storage. DEMO renders are clearly fixture-backed.
 - Personal provider overrides are stored through the operating-system credential store and take precedence over environment configuration; plaintext is never stored in SQLite or returned by the API.
 - Generation-node provider dropdowns show only vendors currently connected by an environment or personal credential. Their dependent model dropdowns are populated from that provider's curated catalog entry and refresh immediately when credentials change.
+
+## Multi-track editor
+
+Each project can hold multiple independently revisioned sequences for alternate landscape, portrait, and square cuts. A sequence stores up to 16 ordered visual, text, caption, and audio tracks and 500 typed clips, with integer-millisecond timing and a five-minute cap. The editor supports frame-snapped move/trim, split, duplicate, multi-select, ripple delete, track lock/hide/mute/reorder, undo/redo, text and Arabic-capable title settings, visual fit/opacity/rotation/fades, audio gain/fades, transitions, and timeline zoom.
+
+Sequence content is immutable: pointer gestures commit on pointer-up, field edits debounce, and every undo/redo or history restore creates a new `SequenceRevision`. Playhead, zoom, selection, and panels are separate view state. Opening an existing project seeds its first **Main edit** from the latest video while keeping all imports, generations, and exports in the asset bin.
+
+Imports now include PNG/JPEG/WebP, MP4/WebM/MOV, and WAV/MP3/M4A. Lazy analysis records duration, dimensions, frame rate, and audio presence, then creates hash/version-keyed thumbnails, waveforms, and maximum-720p editing proxies without modifying originals. Generation remains provider-funded and returns to the shared reviewable library; inserting or editing an existing asset has no provider charge.
+
+Exports consume an exact sequence revision and preset, emit 30 fps H.264 `yuv420p` plus AAC 48 kHz stereo when audio exists, upload MP4 and optional SRT to B2, and cache identical successful renders by revision/preset/input hashes. Stable render events report preparation, encoding, upload, cancellation, failure, and completion. Failed or interrupted renders can be retried without replacing earlier exports. The Tauri `Save As…` command validates a Studio asset ID, opens the native dialog itself, and streams only that loopback asset to the single user-approved path; no broad filesystem permission is granted.
 
 ## Graph and revision contract
 
@@ -35,7 +45,7 @@ A successful execution with a composed MP4 opens a playable **Final output** vie
 
 Long-running nodes emit a live heartbeat with elapsed time every five seconds. Provider step events add per-variant progress, while the initial node event identifies the selected provider, model, variant count, and timeout. Development reload watches only `services/api/app`, preventing SQLite and WAL writes from restarting active executions.
 
-Imported PNG/JPEG/WebP, WAV/MP3, and MP4/WebM files are MIME and size checked, hashed, and copied below the configured Studio data directory. Paths are resolved before access. An import is uploaded with `genblaze-s3` only when a remote provider needs an external URL. Tauri exposes no shell or unrestricted filesystem capability.
+Imported files are MIME and size checked, hashed, and copied below the configured Studio data directory. Paths are resolved before access. An import is uploaded with `genblaze-s3` only when a remote provider needs an external URL. Tauri exposes no shell or unrestricted filesystem capability.
 
 ## Commands
 

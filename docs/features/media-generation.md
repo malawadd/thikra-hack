@@ -6,6 +6,10 @@ OpenAI Sora advertises its supported 4/8/12-second grid to Studio. The desktop r
 
 Studio image nodes create one to four independent variants. Reference images are sent only to the multimodal Look Director/agent, which emits structured text style guidance; this is visibly labeled agent-analyzed guidance and is not represented as direct image conditioning. Video generation preserves the real presigned image-to-video handoff declared by each catalog entry. Successful node outputs are keyed by semantic node version/configuration, provider/model, and upstream asset hashes, so moving a node never invalidates media.
 
+The Edit workspace reads the same capability catalog and exposes only configured vendors and their curated model lists for additional image/video requests. It hands paid creation back to Generate's estimate-and-confirm flow; results return through the shared project asset library and require explicit timeline insertion. Existing assets can be inserted, trimmed, duplicated, and rendered without another provider call or provider charge.
+
+Automatic captions create the current audible mix locally, then use the configured OpenAI `whisper-1` transcription entry with segment timestamps. The request and secret remain backend-only in `provider_catalog.py`; returned cues stay reviewable and editable until the user applies them as one immutable sequence revision. Audio/timing changes mark applied captions stale.
+
 > **Thikra extension (2026-08-01):** outside DEMO,
 > `app/thikra/orchestration.py` executes this catalog-driven B0/B1/B2 path
 > after mandate, provider, and authorization checks. Confirmed planned-scene

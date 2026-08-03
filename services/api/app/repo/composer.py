@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 
 from genblaze_core.media import Mp4Handler
 from genblaze_core.models.asset import Asset
+from PIL import Image, ImageDraw, ImageFont
 
 from app.repo.pipelines import PREFIX, backend
 from app.types.storyboard import StoryboardSpec
@@ -615,3 +616,364 @@ def compose_studio(
             sha256=_sha256(payload),
             size_bytes=len(payload),
         )
+
+
+# --- Studio editor media primitives ---------------------------------------
+
+def _localize(source: str, destination: Path) -> Path:
+    if source.startswith(("http://", "https://")):
+        return _download(source, destination)
+    path = Path(source).resolve()
+    if not path.is_file():
+        raise RuntimeError("Studio source media is missing")
+    return path
+
+
+def _rate(value: str | None) -> str | None:
+    if not value or value == "0/0":
+        return None
+    return value
+
+
+def prepare_studio_asset(source: str, content_type: str, cache: Path) -> dict:
+    """Analyze a source and create versioned preview derivatives by source hash."""
+    cache.mkdir(parents=True, exist_ok=True)
+    suffix = Path(urlparse(source).path).suffix or ".bin"
+    original = _localize(source, cache / f"source{suffix}")
+    if content_type.startswith("image/"):
+        with Image.open(original) as image:
+            width, height = image.size
+            image.thumbnail((480, 270))
+            thumb = cache / "thumbnail-v1.jpg"
+            image.convert("RGB").save(thumb, "JPEG", quality=82)
+        return {
+            "width": width, "height": height, "duration_ms": None,
+            "frame_rate": None, "has_audio": False,
+            "thumbnail_path": str(thumb), "proxy_path": None,
+            "waveform": [], "metadata": {"proxy_version": 1},
+        }
+    info = probe_media(original)
+    streams = info.get("streams", [])
+    video = next((item for item in streams if item.get("codec_type") == "video"), None)
+    audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    duration = float(info.get("format", {}).get("duration") or (video or audio or {}).get("duration") or 0)
+    thumb: Path | None = None
+    proxy: Path | None = None
+    if video:
+        thumb = cache / "thumbnail-v1.jpg"
+        proxy = cache / "proxy-v1.mp4"
+        if not thumb.exists():
+            _run_ffmpeg(["-ss", "0", "-i", str(original), "-frames:v", "1", "-vf", "scale=480:-2", str(thumb)], stage="studio-thumbnail")
+        if not proxy.exists():
+            _run_ffmpeg([
+                "-i", str(original), "-vf", "scale='min(1280,iw)':-2", "-c:v", "libx264",
+                "-preset", "veryfast", "-crf", "27", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", str(proxy),
+            ], stage="studio-proxy")
+    elif audio:
+        thumb = cache / "waveform-v1.png"
+        if not thumb.exists():
+            _run_ffmpeg([
+                "-i", str(original), "-filter_complex", "showwavespic=s=1200x180:colors=6fe7c8",
+                "-frames:v", "1", str(thumb),
+            ], stage="studio-waveform")
+    return {
+        "width": int(video.get("width", 0)) if video else None,
+        "height": int(video.get("height", 0)) if video else None,
+        "duration_ms": max(1, round(duration * 1000)) if duration else None,
+        "frame_rate": _rate(video.get("avg_frame_rate")) if video else None,
+        "has_audio": bool(audio), "thumbnail_path": str(thumb) if thumb else None,
+        "proxy_path": str(proxy) if proxy else None, "waveform": [],
+        "metadata": {"proxy_version": 1, "format": info.get("format", {}).get("format_name")},
+    }
+
+
+def create_demo_editor_clip(destination: Path, duration_sec: float) -> Path:
+    """Create a clearly synthetic local clip for the deterministic DEMO editor."""
+    _run_ffmpeg(
+        [
+            "-f", "lavfi", "-i",
+            f"color=c=0x30265a:s=1280x720:r=30:d={duration_sec}",
+            "-vf", f"fade=t=in:st=0:d=.35,fade=t=out:st={max(.35, duration_sec - .35)}:d=.35",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(destination),
+        ],
+        stage="studio-demo-video",
+    )
+    return destination
+
+
+def extract_studio_sequence_audio(
+    document: dict, assets: dict[str, dict], destination: Path
+) -> Path:
+    """Create the current audible sequence mix for caption transcription."""
+    tracks = {track["id"]: track for track in document["tracks"]}
+    inputs: list[str] = []
+    filters: list[str] = []
+    labels: list[str] = []
+    input_index = 0
+    for clip_index, clip in enumerate(document["clips"]):
+        if clip["kind"] not in {"audio", "video"} or tracks[clip["track_id"]].get("muted"):
+            continue
+        descriptor = assets.get(clip.get("asset_id"))
+        if not descriptor or (clip["kind"] == "video" and not descriptor.get("has_audio")):
+            continue
+        path = _localize(
+            descriptor.get("path") or descriptor.get("url"),
+            destination.parent / f"caption-source-{clip_index}.bin",
+        )
+        length = clip["duration_ms"] / 1000
+        inputs += ["-ss", str(clip.get("source_in_ms", 0) / 1000), "-t", str(length), "-i", str(path)]
+        audio = clip.get("audio") or {}
+        gain = 0 if audio.get("muted") else float(audio.get("gain_db", 0))
+        label = f"captiona{clip_index}"
+        filters.append(
+            f"[{input_index}:a]atrim=duration={length},asetpts=PTS-STARTPTS,"
+            f"volume={10 ** (gain / 20):.5f},adelay={clip['start_ms']}|{clip['start_ms']}[{label}]"
+        )
+        labels.append(label)
+        input_index += 1
+    if not labels:
+        raise RuntimeError("The sequence has no audible media to transcribe")
+    filters.append(
+        "".join(f"[{label}]" for label in labels)
+        + f"amix=inputs={len(labels)}:duration=longest:normalize=0[aout]"
+    )
+    _run_ffmpeg(
+        [
+            *inputs, "-filter_complex", ";".join(filters), "-map", "[aout]",
+            "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(destination),
+        ],
+        stage="studio-caption-mix",
+    )
+    return destination
+
+
+def _font_path(family: str) -> str | None:
+    windows = Path("C:/Windows/Fonts")
+    choices = {
+        "Noto Sans Arabic": ["NotoSansArabic-Regular.ttf", "segoeui.ttf"],
+        "Noto Serif": ["NotoSerif-Regular.ttf", "georgia.ttf"],
+        "Noto Sans": ["NotoSans-Regular.ttf", "arial.ttf"],
+    }
+    for name in choices.get(family, choices["Noto Sans"]):
+        candidate = windows / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _text_card(clip: dict, canvas: tuple[int, int], destination: Path) -> Path:
+    settings = clip.get("text") or {}
+    width, height = canvas
+    image = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    size = max(10, int(settings.get("font_size", 56) * height / 1080))
+    try:
+        font = ImageFont.truetype(_font_path(settings.get("font_family", "Noto Sans")), size)
+    except (OSError, TypeError):
+        font = ImageFont.load_default(size=size)
+    text = str(settings.get("content", ""))
+    box = draw.multiline_textbbox((0, 0), text, font=font, align=settings.get("align", "center"), spacing=8)
+    text_width, text_height = box[2] - box[0], box[3] - box[1]
+    x = int(float(settings.get("position_x", .5)) * width - text_width / 2)
+    y = int(float(settings.get("position_y", .82)) * height - text_height / 2)
+    background = settings.get("background", "#00000000")
+    if background[-2:] != "00":
+        draw.rounded_rectangle((x - 18, y - 10, x + text_width + 18, y + text_height + 10), 12, fill=background)
+    draw.multiline_text((x, y), text, font=font, fill=settings.get("color", "#ffffff"), align=settings.get("align", "center"), spacing=8)
+    image.save(destination)
+    return destination
+
+
+def _srt_from_clips(clips: list[dict]) -> bytes | None:
+    captions = sorted((clip for clip in clips if clip["kind"] == "caption"), key=lambda item: item["start_ms"])
+    if not captions:
+        return None
+    lines: list[str] = []
+    for index, clip in enumerate(captions, 1):
+        start = clip["start_ms"] / 1000
+        end = (clip["start_ms"] + clip["duration_ms"]) / 1000
+        lines.extend([str(index), f"{_srt_ts(start)} --> {_srt_ts(end)}", clip["text"]["content"], ""])
+    return "\n".join(lines).encode("utf-8")
+
+
+def _run_editor_ffmpeg(args: list[str], duration_ms: int, on_progress, cancelled) -> None:
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args[:-1],
+        "-progress", "pipe:1", "-nostats", args[-1],
+    ]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    output: list[str] = []
+    assert process.stdout is not None
+    while True:
+        if cancelled():
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            raise InterruptedError("Studio export cancelled")
+        line = process.stdout.readline()
+        if line:
+            output.append(line.strip())
+            if line.startswith("out_time_ms="):
+                encoded_ms = int(line.partition("=")[2] or 0) // 1000
+                percent = min(94, 15 + round(encoded_ms / max(1, duration_ms) * 78))
+                on_progress("encoding", percent, f"Encoding {max(0, percent - 15)}%")
+        if process.poll() is not None:
+            break
+    if process.returncode:
+        raise RuntimeError("ffmpeg sequence render failed: " + "\n".join(output[-20:])[-2000:])
+
+
+def render_studio_sequence(
+    document: dict,
+    assets: dict[str, dict],
+    canvas: tuple[int, int],
+    *,
+    project_id: str,
+    render_id: str,
+    on_progress,
+    cancelled,
+) -> tuple[Asset, Asset | None]:
+    """Render a validated timeline document and upload MP4 plus optional SRT."""
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg binary not found on PATH — see infra/README.md")
+    clips = document["clips"]
+    duration_ms = max((clip["start_ms"] + clip["duration_ms"] for clip in clips), default=1000)
+    tracks = {track["id"]: track for track in document["tracks"]}
+    active = [clip for clip in clips if not tracks[clip["track_id"]].get("hidden")]
+    on_progress("preparing", 5, "Preparing clips and overlays")
+    with tempfile.TemporaryDirectory(prefix="thikra-editor-render-") as tmp_str:
+        tmp = Path(tmp_str)
+        input_args: list[str] = []
+        filters = [f"color=c={document.get('background', '#05070a')}:s={canvas[0]}x{canvas[1]}:r=30:d={duration_ms / 1000}[base]"]
+        visual_labels: list[tuple[dict, str]] = []
+        audio_labels: list[tuple[str, str]] = []
+        input_index = 0
+        ordered = sorted(active, key=lambda item: (tracks[item["track_id"]]["order"], item["start_ms"]))
+        for clip_index, clip in enumerate(ordered):
+            if clip["kind"] in {"text", "caption"}:
+                path = _text_card(clip, canvas, tmp / f"text-{clip_index}.png")
+                input_args += ["-loop", "1", "-t", str(clip["duration_ms"] / 1000), "-i", str(path)]
+                label = f"v{clip_index}"
+                transform = clip.get("transform") or {}
+                chain = f"[{input_index}:v]format=rgba,colorchannelmixer=aa={float(transform.get('opacity', 1))}"
+                fade_in = min(clip["duration_ms"] // 2, int(transform.get("fade_in_ms", 0)))
+                fade_out = min(clip["duration_ms"] // 2, int(transform.get("fade_out_ms", 0)))
+                if fade_in:
+                    chain += f",fade=t=in:st=0:d={fade_in / 1000}:alpha=1"
+                if fade_out:
+                    chain += f",fade=t=out:st={(clip['duration_ms'] - fade_out) / 1000}:d={fade_out / 1000}:alpha=1"
+                filters.append(f"{chain},setpts=PTS-STARTPTS+{clip['start_ms']}/1000/TB[{label}]")
+                visual_labels.append((clip, label))
+                input_index += 1
+                continue
+            descriptor = assets.get(clip.get("asset_id"))
+            if not descriptor:
+                continue
+            suffix = Path(urlparse(descriptor.get("url") or descriptor.get("path") or "source.bin").path).suffix or ".bin"
+            path = _localize(descriptor.get("path") or descriptor.get("url"), tmp / f"source-{clip_index}{suffix}")
+            start, length = clip.get("source_in_ms", 0) / 1000, clip["duration_ms"] / 1000
+            if clip["kind"] == "image":
+                input_args += ["-loop", "1", "-t", str(length), "-i", str(path)]
+            else:
+                input_args += ["-ss", str(start), "-t", str(length), "-i", str(path)]
+            if clip["kind"] in {"video", "image"}:
+                transform = clip.get("transform") or {}
+                fit = transform.get("fit", "fill")
+                normalize = (
+                    f"scale={canvas[0]}:{canvas[1]}:force_original_aspect_ratio={'increase' if fit == 'fill' else 'decrease'},"
+                    + (f"crop={canvas[0]}:{canvas[1]}" if fit == "fill" else f"pad={canvas[0]}:{canvas[1]}:(ow-iw)/2:(oh-ih)/2")
+                )
+                opacity = float(transform.get("opacity", 1))
+                chain = f"[{input_index}:v]{normalize},fps=30,format=rgba,colorchannelmixer=aa={opacity}"
+                if transform.get("ken_burns") and clip["kind"] == "image":
+                    frames = max(1, round(clip["duration_ms"] / 1000 * 30))
+                    chain += f",zoompan=z='min(zoom+0.0005,1.08)':d={frames}:s={canvas[0]}x{canvas[1]}:fps=30"
+                scale = float(transform.get("scale", 1))
+                rotation = float(transform.get("rotation", 0))
+                if scale != 1:
+                    chain += f",scale=iw*{scale}:ih*{scale}"
+                if rotation:
+                    chain += f",rotate={rotation}*PI/180:ow=rotw(iw):oh=roth(ih):c=none"
+                transition_in = clip.get("transition_in", "cut")
+                transition_out = clip.get("transition_out", "cut")
+                transition_ms = int(clip.get("transition_duration_ms", 0))
+                fade_in = min(clip["duration_ms"] // 2, int(transform.get("fade_in_ms", 0) or (transition_ms if transition_in != "cut" else 0)))
+                fade_out = min(clip["duration_ms"] // 2, int(transform.get("fade_out_ms", 0) or (transition_ms if transition_out != "cut" else 0)))
+                if fade_in:
+                    chain += f",fade=t=in:st=0:d={fade_in / 1000}:alpha={1 if transition_in == 'dissolve' else 0}:color=black"
+                if fade_out:
+                    chain += f",fade=t=out:st={(clip['duration_ms'] - fade_out) / 1000}:d={fade_out / 1000}:alpha={1 if transition_out == 'dissolve' else 0}:color=black"
+                label = f"v{clip_index}"
+                filters.append(f"{chain},setpts=PTS-STARTPTS+{clip['start_ms']}/1000/TB[{label}]")
+                visual_labels.append((clip, label))
+                if clip["kind"] == "video" and descriptor.get("has_audio") and not tracks[clip["track_id"]].get("muted"):
+                    audio = clip.get("audio") or {}
+                    label = f"a{clip_index}"
+                    gain = float(audio.get("gain_db", 0))
+                    filters.append(
+                        f"[{input_index}:a]atrim=duration={length},asetpts=PTS-STARTPTS,"
+                        f"volume={10 ** (gain / 20):.5f},adelay={clip['start_ms']}|{clip['start_ms']}[{label}]"
+                    )
+                    audio_labels.append((label, str(audio.get("role", "source"))))
+            elif clip["kind"] == "audio" and not tracks[clip["track_id"]].get("muted"):
+                audio = clip.get("audio") or {}
+                if not audio.get("muted"):
+                    label = f"a{clip_index}"
+                    gain = float(audio.get("gain_db", 0))
+                    chain = f"[{input_index}:a]atrim=duration={length},asetpts=PTS-STARTPTS,volume={10 ** (gain / 20):.5f}"
+                    if audio.get("fade_in_ms"):
+                        chain += f",afade=t=in:st=0:d={audio['fade_in_ms'] / 1000}"
+                    if audio.get("fade_out_ms"):
+                        chain += f",afade=t=out:st={max(0, length - audio['fade_out_ms'] / 1000)}:d={audio['fade_out_ms'] / 1000}"
+                    filters.append(f"{chain},adelay={clip['start_ms']}|{clip['start_ms']}[{label}]")
+                    audio_labels.append((label, str(audio.get("role", "other"))))
+            input_index += 1
+        current = "base"
+        for overlay_index, (clip, label) in enumerate(visual_labels):
+            next_label = f"canvas{overlay_index}"
+            start, end = clip["start_ms"] / 1000, (clip["start_ms"] + clip["duration_ms"]) / 1000
+            transform = clip.get("transform") or {}
+            x = float(transform.get("position_x", .5))
+            y = float(transform.get("position_y", .5))
+            filters.append(f"[{current}][{label}]overlay=(W-w)*{x}:(H-h)*{y}:eof_action=pass:enable='between(t,{start},{end})'[{next_label}]")
+            current = next_label
+        if audio_labels:
+            labels = [label for label, _ in audio_labels]
+            narration = [label for label, role in audio_labels if role == "narration"]
+            music = [label for label, role in audio_labels if role == "music"]
+            if document.get("duck_music_under_narration") and narration and music:
+                narr_refs = "".join(f"[{label}]" for label in narration)
+                music_refs = "".join(f"[{label}]" for label in music)
+                filters.append(f"{narr_refs}amix=inputs={len(narration)}:normalize=0[narrmix]")
+                filters.append("[narrmix]asplit=2[narrside][narrout]")
+                filters.append(f"{music_refs}amix=inputs={len(music)}:normalize=0[musicmix]")
+                filters.append("[musicmix][narrside]sidechaincompress=threshold=.08:ratio=8:attack=20:release=500[ducked]")
+                other = [label for label in labels if label not in narration and label not in music]
+                refs = "[ducked][narrout]" + "".join(f"[{label}]" for label in other)
+                count = 2 + len(other)
+            else:
+                refs = "".join(f"[{label}]" for label in labels)
+                count = len(labels)
+            filters.append(f"{refs}amix=inputs={count}:duration=longest:normalize=0[aout]")
+        else:
+            filters.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={duration_ms / 1000}[aout]")
+        output = tmp / "sequence.mp4"
+        args = [*input_args, "-filter_complex", ";".join(filters), "-map", f"[{current}]", "-t", str(duration_ms / 1000), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "20"]
+        args += ["-map", "[aout]", "-c:a", "aac", "-ar", "48000", "-ac", "2"]
+        args += ["-movflags", "+faststart", str(output)]
+        _run_editor_ffmpeg(args, duration_ms, on_progress, cancelled)
+        on_progress("uploading", 96, "Uploading durable project export")
+        payload = output.read_bytes()
+        key = f"studio/{project_id}/renders/{render_id}/final.mp4"
+        backend().put(key, payload, content_type="video/mp4")
+        result = Asset(url=backend().get_durable_url(key), media_type="video/mp4", sha256=_sha256(payload), size_bytes=len(payload))
+        srt_payload = _srt_from_clips(clips)
+        srt_asset = None
+        if srt_payload:
+            srt_key = f"studio/{project_id}/renders/{render_id}/captions.srt"
+            backend().put(srt_key, srt_payload, content_type="application/x-subrip")
+            srt_asset = Asset(url=backend().get_durable_url(srt_key), media_type="application/x-subrip", sha256=_sha256(srt_payload), size_bytes=len(srt_payload))
+        return result, srt_asset

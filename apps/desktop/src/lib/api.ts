@@ -23,4 +23,14 @@ export function studioEvents(executionId: string, onEvent: (event: MessageEvent<
   return source;
 }
 
+export function renderEvents(renderId: string, onEvent: (event: MessageEvent<string>) => void, onError: () => void): EventSource {
+  const source = new EventSource(`${API}/studio/renders/${renderId}/events`);
+  source.onmessage = onEvent;
+  source.onerror = onError;
+  return source;
+}
+
 export const assetUrl = (id: string) => `${API}/studio/assets/${id}/content`;
+export const assetThumbnailUrl = (id: string) => `${API}/studio/assets/${id}/thumbnail`;
+export const assetProxyUrl = (id: string) => `${API}/studio/assets/${id}/proxy`;
+export const assetDownloadUrl = (id: string) => `${API}/studio/assets/${id}/download`;
