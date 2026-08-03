@@ -11,14 +11,17 @@ from collections.abc import Callable
 
 from genblaze_core import Asset, Modality, Pipeline
 
-from app.repo.pipelines import PIPELINE_NAME, presign_asset_url, sink
+from app.repo.pipelines import PIPELINE_NAME
 from app.repo.provider_catalog import CatalogEntry
+from app.studio.storage_connection import studio_presign_asset_url
 
 
-async def _stream_result(pipeline: Pipeline, *, timeout: int, on_event: Callable[[object], None] | None):
+async def _stream_result(
+    pipeline: Pipeline, *, timeout: int, on_event: Callable[[object], None] | None
+):
     result = None
     async for event in pipeline.astream(
-        sink=sink(),
+        sink=None,
         timeout=timeout,
         raise_on_failure=True,
     ):
@@ -63,7 +66,7 @@ def generate_videos(
         max_concurrency=min(variants, 3),
         preflight=False,
     )
-    image_ref = presign_asset_url(image_url) if image_url else None
+    image_ref = studio_presign_asset_url(image_url) if image_url else None
     for _ in range(variants):
         kwargs = {
             "model": model,
@@ -77,7 +80,7 @@ def generate_videos(
             kwargs["image"] = image_ref
         pipeline = pipeline.step(provider, **kwargs)
     return pipeline.run(
-        sink=sink(),
+        sink=None,
         timeout=1200,
         fail_fast=False,
         raise_on_failure=False,
@@ -100,19 +103,13 @@ def generate_audio(
         prompt=prompt,
         **params,
     )
-    return pipeline.run(
-        sink=sink(), timeout=600, fail_fast=False, raise_on_failure=False
-    )
+    return pipeline.run(sink=None, timeout=600, fail_fast=False, raise_on_failure=False)
 
 
 def result_assets(result) -> list[Asset]:
     assets = [asset for step in result.run.steps for asset in (step.assets or [])]
     if assets:
         return assets
-    failures = [
-        str(step.error)
-        for step in result.run.steps
-        if getattr(step, "error", None)
-    ]
+    failures = [str(step.error) for step in result.run.steps if getattr(step, "error", None)]
     detail = "; ".join(failures) or f"pipeline status was {result.run.status}"
     raise RuntimeError(f"Provider returned no usable media: {detail}")

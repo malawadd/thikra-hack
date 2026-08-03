@@ -13,8 +13,7 @@ from app.commerce.service import seed_commerce
 from app.config import settings
 from app.studio.editor import interrupt_stale_renders
 from app.studio.service import interrupt_incomplete_executions
-from app.thikra import initialize_database
-from app.thikra.database import SessionLocal
+from app.thikra.database import SessionLocal, initialize_database
 from app.thikra.payments import validate_prava_configuration
 from app.thikra.service import seed_database
 

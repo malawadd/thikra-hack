@@ -16,6 +16,7 @@ no `ffmpeg-python` dependency layer. Call from `main.py` through
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -30,6 +31,7 @@ from genblaze_core.media import Mp4Handler
 from genblaze_core.models.asset import Asset
 from PIL import Image, ImageDraw, ImageFont
 
+from app.config import settings
 from app.repo.pipelines import PREFIX, backend
 from app.types.storyboard import StoryboardSpec
 
@@ -677,8 +679,8 @@ def compose_studio(
     with tempfile.TemporaryDirectory(prefix="thikra-studio-compose-") as tmp_str:
         tmp = Path(tmp_str)
         visual_suffix = ".mp4" if visual_url.lower().split("?")[0].endswith(".mp4") else ".png"
-        visual = _download(visual_url, tmp / f"visual{visual_suffix}")
-        audio = [_download(url, tmp / f"audio-{index}.wav") for index, url in enumerate(audio_urls)]
+        visual = _localize(visual_url, tmp / f"visual{visual_suffix}")
+        audio = [_localize(url, tmp / f"audio-{index}.wav") for index, url in enumerate(audio_urls)]
         output = tmp / "studio-final.mp4"
         inputs: list[str] = []
         if visual_suffix == ".mp4":
@@ -706,10 +708,15 @@ def compose_studio(
         args.append(str(output))
         _run_ffmpeg(args, stage="studio-compose")
         payload = output.read_bytes()
-        key = f"studio/{project_id}/{execution_id}/final.mp4"
-        backend().put(key, payload, content_type="video/mp4")
+        stored = _persist_studio_output(
+            payload,
+            project_id=project_id,
+            category="compositions",
+            item_id=execution_id,
+            name="final.mp4",
+        )
         return Asset(
-            url=backend().get_durable_url(key),
+            url=str(stored),
             media_type="video/mp4",
             sha256=_sha256(payload),
             size_bytes=len(payload),
@@ -726,6 +733,16 @@ def _localize(source: str, destination: Path) -> Path:
     if not path.is_file():
         raise RuntimeError("Studio source media is missing")
     return path
+
+
+def _persist_studio_output(
+    payload: bytes, *, project_id: str, category: str, item_id: str, name: str
+) -> Path:
+    root = (Path(settings.thikra_data_dir) / "studio" / category / project_id / item_id).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    destination = root / name
+    destination.write_bytes(payload)
+    return destination
 
 
 def _rate(value: str | None) -> str | None:
@@ -920,6 +937,15 @@ def extract_studio_sequence_audio(
 
 
 def _font_path(family: str) -> str | None:
+    bundled = Path(os.environ.get("THIKRA_FONT_DIR", ""))
+    bundled_choices = {
+        "Noto Sans Arabic": "NotoSansArabic.ttf",
+        "Noto Serif": "NotoSerif.ttf",
+        "Noto Sans": "NotoSans.ttf",
+    }
+    bundled_font = bundled / bundled_choices.get(family, "NotoSans.ttf")
+    if bundled_font.is_file():
+        return str(bundled_font)
     windows = Path("C:/Windows/Fonts")
     choices = {
         "Noto Sans Arabic": ["NotoSansArabic-Regular.ttf", "segoeui.ttf"],
@@ -1229,12 +1255,13 @@ def render_studio_sequence(
         args += ["-map", "[aout]", "-c:a", "aac", "-ar", "48000", "-ac", "2"]
         args += ["-movflags", "+faststart", str(output)]
         _run_editor_ffmpeg(args, duration_ms, on_progress, cancelled)
-        on_progress("uploading", 96, "Uploading durable project export")
+        on_progress("saving", 96, "Saving durable local project export")
         payload = output.read_bytes()
-        key = f"studio/{project_id}/renders/{render_id}/final.mp4"
-        backend().put(key, payload, content_type="video/mp4")
+        stored = _persist_studio_output(
+            payload, project_id=project_id, category="renders", item_id=render_id, name="final.mp4"
+        )
         result = Asset(
-            url=backend().get_durable_url(key),
+            url=str(stored),
             media_type="video/mp4",
             sha256=_sha256(payload),
             size_bytes=len(payload),
@@ -1242,10 +1269,15 @@ def render_studio_sequence(
         srt_payload = _srt_from_clips(clips)
         srt_asset = None
         if srt_payload:
-            srt_key = f"studio/{project_id}/renders/{render_id}/captions.srt"
-            backend().put(srt_key, srt_payload, content_type="application/x-subrip")
+            stored_srt = _persist_studio_output(
+                srt_payload,
+                project_id=project_id,
+                category="renders",
+                item_id=render_id,
+                name="captions.srt",
+            )
             srt_asset = Asset(
-                url=backend().get_durable_url(srt_key),
+                url=str(stored_srt),
                 media_type="application/x-subrip",
                 sha256=_sha256(srt_payload),
                 size_bytes=len(srt_payload),

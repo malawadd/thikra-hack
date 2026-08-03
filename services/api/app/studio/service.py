@@ -12,7 +12,9 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -64,7 +66,10 @@ NODE_COST_MINOR = {
 }
 MEDIA_LIMITS = {
     "image": (25 * 1024 * 1024, {"image/png", "image/jpeg", "image/webp"}),
-    "audio": (100 * 1024 * 1024, {"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/m4a"}),
+    "audio": (
+        100 * 1024 * 1024,
+        {"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/m4a"},
+    ),
     "video": (500 * 1024 * 1024, {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v"}),
 }
 KEYRING_SERVICE = "thikra-studio"
@@ -141,7 +146,15 @@ def serialize_project(db: Session, project: StudioProject, *, detail: bool = Tru
     return result
 
 
-def create_project(db: Session, *, name: str, description: str, budget: int, currency: str, graph: WorkflowGraph | None) -> StudioProject:
+def create_project(
+    db: Session,
+    *,
+    name: str,
+    description: str,
+    budget: int,
+    currency: str,
+    graph: WorkflowGraph | None,
+) -> StudioProject:
     workflow = graph or default_graph()
     errors = validate_graph(workflow)
     if errors:
@@ -184,12 +197,16 @@ def delete_project(db: Session, project: StudioProject) -> None:
     if running:
         raise RuntimeError("PROJECT_EXECUTION_ACTIVE")
     active_editor = db.scalar(
-        select(func.count()).select_from(StudioRender).where(
+        select(func.count())
+        .select_from(StudioRender)
+        .where(
             StudioRender.project_id == project.id,
             StudioRender.status.in_({"QUEUED", "RUNNING"}),
         )
     ) or db.scalar(
-        select(func.count()).select_from(StudioGenerationJob).where(
+        select(func.count())
+        .select_from(StudioGenerationJob)
+        .where(
             StudioGenerationJob.project_id == project.id,
             StudioGenerationJob.status.in_({"QUEUED", "RUNNING"}),
         )
@@ -197,27 +214,33 @@ def delete_project(db: Session, project: StudioProject) -> None:
     if active_editor:
         raise RuntimeError("PROJECT_EDITOR_JOB_ACTIVE")
 
-    execution_ids = select(WorkflowExecution.id).where(
-        WorkflowExecution.project_id == project.id
+    execution_ids = select(WorkflowExecution.id).where(WorkflowExecution.project_id == project.id)
+    db.execute(
+        delete(StudioExecutionEvent).where(StudioExecutionEvent.execution_id.in_(execution_ids))
     )
-    db.execute(delete(StudioExecutionEvent).where(StudioExecutionEvent.execution_id.in_(execution_ids)))
     db.execute(delete(NodeExecution).where(NodeExecution.execution_id.in_(execution_ids)))
     db.execute(delete(WorkflowExecution).where(WorkflowExecution.project_id == project.id))
     db.execute(delete(StudioAnnotation).where(StudioAnnotation.project_id == project.id))
     sequence_ids = select(StudioSequence.id).where(StudioSequence.project_id == project.id)
     revision_ids = select(SequenceRevision.id).where(SequenceRevision.sequence_id.in_(sequence_ids))
     render_ids = select(StudioRender.id).where(StudioRender.project_id == project.id)
-    generation_ids = select(StudioGenerationJob.id).where(StudioGenerationJob.project_id == project.id)
+    generation_ids = select(StudioGenerationJob.id).where(
+        StudioGenerationJob.project_id == project.id
+    )
     caption_ids = select(StudioCaptionJob.id).where(StudioCaptionJob.project_id == project.id)
     db.execute(delete(StudioRenderEvent).where(StudioRenderEvent.render_id.in_(render_ids)))
-    db.execute(delete(StudioJobEvent).where(
-        ((StudioJobEvent.job_kind == "generation") & StudioJobEvent.job_id.in_(generation_ids))
-        | ((StudioJobEvent.job_kind == "caption") & StudioJobEvent.job_id.in_(caption_ids))
-    ))
+    db.execute(
+        delete(StudioJobEvent).where(
+            ((StudioJobEvent.job_kind == "generation") & StudioJobEvent.job_id.in_(generation_ids))
+            | ((StudioJobEvent.job_kind == "caption") & StudioJobEvent.job_id.in_(caption_ids))
+        )
+    )
     db.execute(delete(StudioRender).where(StudioRender.project_id == project.id))
     db.execute(delete(StudioGenerationJob).where(StudioGenerationJob.project_id == project.id))
     db.execute(delete(StudioCaptionJob).where(StudioCaptionJob.project_id == project.id))
-    db.execute(delete(SequenceAgentProposal).where(SequenceAgentProposal.sequence_id.in_(sequence_ids)))
+    db.execute(
+        delete(SequenceAgentProposal).where(SequenceAgentProposal.sequence_id.in_(sequence_ids))
+    )
     db.execute(delete(SequenceRevision).where(SequenceRevision.id.in_(revision_ids)))
     db.execute(delete(StudioSequence).where(StudioSequence.project_id == project.id))
     db.execute(delete(StudioAsset).where(StudioAsset.project_id == project.id))
@@ -233,7 +256,15 @@ def delete_project(db: Session, project: StudioProject) -> None:
             shutil.rmtree(target)
 
 
-def create_revision(db: Session, project: StudioProject, base_revision_id: str, graph: WorkflowGraph, summary: str, *, source: str = "MANUAL") -> WorkflowRevision:
+def create_revision(
+    db: Session,
+    project: StudioProject,
+    base_revision_id: str,
+    graph: WorkflowGraph,
+    summary: str,
+    *,
+    source: str = "MANUAL",
+) -> WorkflowRevision:
     if project.current_revision_id != base_revision_id:
         raise RuntimeError("STALE_REVISION")
     errors = validate_graph(graph)
@@ -356,12 +387,16 @@ def proposal_asset_urls(db: Session, project_id: str, asset_ids: list[str]) -> l
     urls: list[str] = []
     for asset_id in asset_ids[:4]:
         asset = db.get(StudioAsset, asset_id)
-        if asset is None or asset.project_id != project_id or not asset.content_type.startswith("image/"):
+        if (
+            asset is None
+            or asset.project_id != project_id
+            or not asset.content_type.startswith("image/")
+        ):
             continue
         if asset.remote_url:
-            from app.repo.pipelines import presign_asset_url
+            from app.studio.storage_connection import studio_presign_asset_url
 
-            urls.append(presign_asset_url(asset.remote_url))
+            urls.append(studio_presign_asset_url(asset.remote_url))
         elif asset.local_path and asset.size <= 5 * 1024 * 1024:
             encoded = base64.b64encode(Path(asset.local_path).read_bytes()).decode()
             urls.append(f"data:{asset.content_type};base64,{encoded}")
@@ -443,10 +478,21 @@ def serialize_proposal(proposal: AgentProposal) -> dict:
     }
 
 
-def apply_proposal(db: Session, project: StudioProject, proposal: AgentProposal, base_revision_id: str, operation_ids: list[str]) -> WorkflowRevision:
-    if project.current_revision_id != base_revision_id or proposal.base_revision_id != base_revision_id:
+def apply_proposal(
+    db: Session,
+    project: StudioProject,
+    proposal: AgentProposal,
+    base_revision_id: str,
+    operation_ids: list[str],
+) -> WorkflowRevision:
+    if (
+        project.current_revision_id != base_revision_id
+        or proposal.base_revision_id != base_revision_id
+    ):
         raise RuntimeError("STALE_REVISION")
-    all_operations = [ProposalOperation.model_validate(item) for item in _load(proposal.operations_json, [])]
+    all_operations = [
+        ProposalOperation.model_validate(item) for item in _load(proposal.operations_json, [])
+    ]
     by_id = {item.id: item for item in all_operations}
     selected = set(operation_ids)
     pending = list(selected)
@@ -474,7 +520,9 @@ def apply_proposal(db: Session, project: StudioProject, proposal: AgentProposal,
     return result
 
 
-def estimate_revision(revision: WorkflowRevision, target_node_ids: list[str], force_rerun: bool) -> dict:
+def estimate_revision(
+    revision: WorkflowRevision, target_node_ids: list[str], force_rerun: bool
+) -> dict:
     graph = WorkflowGraph.model_validate(_load(revision.graph_json, {}))
     known = {node.id for node in graph.nodes}
     unknown = set(target_node_ids) - known
@@ -498,10 +546,21 @@ def estimate_revision(revision: WorkflowRevision, target_node_ids: list[str], fo
     for node in topological_nodes(graph):
         if targets and node.id not in targets:
             continue
-        multiplier = node.config.get("variants", 1) if node.type in {"image_generation", "video_generation"} else 1
+        multiplier = (
+            node.config.get("variants", 1)
+            if node.type in {"image_generation", "video_generation"}
+            else 1
+        )
         amount = NODE_COST_MINOR.get(node.type, 0) * int(multiplier)
         if amount:
-            line_items.append({"node_id": node.id, "node_type": node.type, "amount_minor": amount, "estimated": True})
+            line_items.append(
+                {
+                    "node_id": node.id,
+                    "node_type": node.type,
+                    "amount_minor": amount,
+                    "estimated": True,
+                }
+            )
             total += amount
     document = {
         "revision_id": revision.id,
@@ -516,11 +575,20 @@ def estimate_revision(revision: WorkflowRevision, target_node_ids: list[str], fo
     return document
 
 
-def _event(db: Session, execution: WorkflowExecution, event_type: str, node_id: str | None, payload: dict) -> StudioExecutionEvent:
-    sequence = int(
-        db.scalar(select(func.coalesce(func.max(StudioExecutionEvent.sequence), 0)).where(StudioExecutionEvent.execution_id == execution.id))
-        or 0
-    ) + 1
+def _event(
+    db: Session, execution: WorkflowExecution, event_type: str, node_id: str | None, payload: dict
+) -> StudioExecutionEvent:
+    sequence = (
+        int(
+            db.scalar(
+                select(func.coalesce(func.max(StudioExecutionEvent.sequence), 0)).where(
+                    StudioExecutionEvent.execution_id == execution.id
+                )
+            )
+            or 0
+        )
+        + 1
+    )
     event = StudioExecutionEvent(
         execution_id=execution.id,
         sequence=sequence,
@@ -585,9 +653,7 @@ def create_execution(
     return execution
 
 
-def _provider_checkpoints(
-    db: Session, execution_id: str
-) -> dict[str, list[dict]]:
+def _provider_checkpoints(db: Session, execution_id: str) -> dict[str, list[dict]]:
     checkpoints: dict[str, list[dict]] = {}
     events = db.scalars(
         select(StudioExecutionEvent)
@@ -605,9 +671,7 @@ def _provider_checkpoints(
     return checkpoints
 
 
-def _execution_lineage(
-    db: Session, execution: WorkflowExecution
-) -> list[WorkflowExecution]:
+def _execution_lineage(db: Session, execution: WorkflowExecution) -> list[WorkflowExecution]:
     lineage: list[WorkflowExecution] = []
     seen: set[str] = set()
     current: WorkflowExecution | None = execution
@@ -622,9 +686,7 @@ def _execution_lineage(
     return lineage
 
 
-def _lineage_checkpoints(
-    db: Session, execution: WorkflowExecution
-) -> dict[str, list[dict]]:
+def _lineage_checkpoints(db: Session, execution: WorkflowExecution) -> dict[str, list[dict]]:
     checkpoints: dict[str, list[dict]] = {}
     for ancestor in _execution_lineage(db, execution):
         for node_id, assets in _provider_checkpoints(db, ancestor.id).items():
@@ -664,9 +726,7 @@ def estimate_resume(db: Session, execution: WorkflowExecution) -> dict:
         raise RuntimeError("EXECUTION_NOT_RESUMABLE")
     estimate = estimate_revision(revision, [item.node_id for item in unresolved], False)
     checkpoints = _lineage_checkpoints(db, execution)
-    recoverable = sorted(
-        set(estimate["execution_node_ids"]).intersection(checkpoints)
-    )
+    recoverable = sorted(set(estimate["execution_node_ids"]).intersection(checkpoints))
     if recoverable:
         estimate["line_items"] = [
             item for item in estimate["line_items"] if item["node_id"] not in recoverable
@@ -726,12 +786,12 @@ def create_resume_execution(
         if record is None:
             continue
         assets = _persist_asset_descriptors(
-            db, project.id, node_id, checkpoints[node_id]
+            db, project.id, node_id, checkpoints[node_id], allow_remote_only=True
         )
         record.status = "CACHED"
-        record.cache_key = "checkpoint:" + hashlib.sha256(
-            _json(checkpoints[node_id]).encode()
-        ).hexdigest()[:53]
+        record.cache_key = (
+            "checkpoint:" + hashlib.sha256(_json(checkpoints[node_id]).encode()).hexdigest()[:53]
+        )
         record.output_json = _json(
             {"kind": output_kinds.get(node_types[node_id], node_types[node_id]), "assets": assets}
         )
@@ -774,7 +834,11 @@ def serialize_execution(db: Session, execution: WorkflowExecution, *, detail: bo
     }
     if detail:
         nodes = list(
-            db.scalars(select(NodeExecution).where(NodeExecution.execution_id == execution.id).order_by(NodeExecution.created_at))
+            db.scalars(
+                select(NodeExecution)
+                .where(NodeExecution.execution_id == execution.id)
+                .order_by(NodeExecution.created_at)
+            )
         )
         result["nodes"] = [
             {
@@ -795,9 +859,7 @@ def serialize_execution(db: Session, execution: WorkflowExecution, *, detail: bo
 def interrupt_incomplete_executions(db: Session) -> int:
     executions = list(
         db.scalars(
-            select(WorkflowExecution).where(
-                WorkflowExecution.status.in_({"QUEUED", "RUNNING"})
-            )
+            select(WorkflowExecution).where(WorkflowExecution.status.in_({"QUEUED", "RUNNING"}))
         )
     )
     now = datetime.now(UTC)
@@ -825,12 +887,21 @@ def interrupt_incomplete_executions(db: Session) -> int:
     return len(executions)
 
 
-def _demo_svg(project_id: str, execution_id: str, node_id: str, variant: int, prompt: str) -> StudioAsset:
-    root = (Path(settings.thikra_data_dir) / "studio" / "generated" / project_id / execution_id).resolve()
+def _demo_svg(
+    project_id: str, execution_id: str, node_id: str, variant: int, prompt: str
+) -> StudioAsset:
+    root = (
+        Path(settings.thikra_data_dir) / "studio" / "generated" / project_id / execution_id
+    ).resolve()
     root.mkdir(parents=True, exist_ok=True)
     path = root / f"{node_id}-{variant}.svg"
     safe_prompt = prompt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:120]
-    colors = [("#342f79", "#d769ff"), ("#0b5e65", "#61e6bb"), ("#814421", "#ffb457"), ("#283f73", "#75b7ff")]
+    colors = [
+        ("#342f79", "#d769ff"),
+        ("#0b5e65", "#61e6bb"),
+        ("#814421", "#ffb457"),
+        ("#283f73", "#75b7ff"),
+    ]
     start, end = colors[variant % len(colors)]
     payload = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g"><stop stop-color="{start}"/><stop offset="1" stop-color="{end}"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><circle cx="970" cy="180" r="180" fill="white" opacity=".12"/><text x="72" y="590" fill="white" font-size="44" font-family="Segoe UI">Variant {variant + 1}</text><text x="72" y="650" fill="white" opacity=".8" font-size="22" font-family="Segoe UI">{safe_prompt}</text></svg>'''.encode()
     path.write_bytes(payload)
@@ -862,9 +933,7 @@ def _persist_remote_assets(
         [
             {
                 "url": str(asset.url),
-                "media_type": str(
-                    getattr(asset, "media_type", "application/octet-stream")
-                ),
+                "media_type": str(getattr(asset, "media_type", "application/octet-stream")),
                 "size_bytes": int(getattr(asset, "size_bytes", 0) or 0),
                 "sha256": str(getattr(asset, "sha256", "") or ""),
             }
@@ -878,21 +947,41 @@ def _persist_asset_descriptors(
     project_id: str,
     node_id: str,
     assets: list[dict],
+    *,
+    allow_remote_only: bool = False,
 ) -> list[dict]:
     result: list[dict] = []
     for index, asset in enumerate(assets):
         url = str(asset["url"])
         media_type = str(asset.get("media_type", "application/octet-stream"))
         kind = media_type.split("/", 1)[0]
+        try:
+            local_path, size, digest = _download_generated_asset(
+                project_id, node_id, index, url, media_type
+            )
+        except httpx.HTTPError:
+            if not allow_remote_only:
+                raise
+            local_path = None
+            size = int(asset.get("size_bytes", 0) or 0)
+            digest = str(asset.get("sha256") or hashlib.sha256(url.encode()).hexdigest())
+        remote_url = None
+        from app.studio.storage_connection import studio_backend
+
+        storage = studio_backend()
+        if storage is not None and local_path is not None:
+            key = f"studio/{project_id}/generated/{digest[:2]}/{digest}{local_path.suffix}"
+            storage.put(key, local_path.read_bytes(), content_type=media_type)
+            remote_url = storage.get_durable_url(key)
         record = StudioAsset(
             project_id=project_id,
             name=f"{node_id} output {index + 1}",
             asset_type=kind,
             content_type=media_type,
-            local_path=None,
-            remote_url=url,
-            size=int(asset.get("size_bytes", 0) or 0),
-            sha256=str(asset.get("sha256") or hashlib.sha256(url.encode()).hexdigest()),
+            local_path=str(local_path) if local_path is not None else None,
+            remote_url=remote_url or (url if allow_remote_only else None),
+            size=size,
+            sha256=digest,
             source_kind="GENERATED",
             origin_node_id=node_id,
         )
@@ -903,10 +992,61 @@ def _persist_asset_descriptors(
                 "id": record.id,
                 "name": record.name,
                 "content_type": record.content_type,
-                "url": record.remote_url,
+                "url": record.remote_url or record.local_path,
             }
         )
     return result
+
+
+def _download_generated_asset(
+    project_id: str, node_id: str, index: int, url: str, media_type: str
+) -> tuple[Path, int, str]:
+    kind = media_type.split("/", 1)[0]
+    limit = MEDIA_LIMITS.get(kind, (500 * 1024 * 1024, set()))[0]
+    root = (Path(settings.thikra_data_dir) / "studio" / "generated" / project_id).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    temporary = root / f".{node_id}-{index}-{uuid.uuid4().hex}.download"
+    digest = hashlib.sha256()
+    size = 0
+    parsed = urlparse(url)
+    direct_path = Path(url)
+    source_path = Path(parsed.path) if parsed.scheme == "file" else direct_path
+    if direct_path.is_file() or parsed.scheme == "file":
+        source = source_path.open("rb")
+        close_source = True
+        response = None
+    else:
+        response = httpx.stream("GET", url, follow_redirects=True, timeout=120)
+        opened = response.__enter__()
+        opened.raise_for_status()
+        source = opened.iter_bytes(1024 * 1024)
+        close_source = False
+    try:
+        with temporary.open("wb") as target:
+            chunks = iter(lambda: source.read(1024 * 1024), b"") if close_source else source
+            for chunk in chunks:
+                size += len(chunk)
+                if size > limit:
+                    raise RuntimeError(
+                        f"Provider output exceeds the {limit // (1024 * 1024)} MB limit"
+                    )
+                digest.update(chunk)
+                target.write(chunk)
+    finally:
+        if close_source:
+            source.close()
+        elif response is not None:
+            response.__exit__(None, None, None)
+    sha = digest.hexdigest()
+    suffix = Path(parsed.path).suffix or mimetypes.guess_extension(media_type) or ".bin"
+    destination_dir = root / sha[:2]
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / f"{sha}{suffix.lower()}"
+    if destination.exists():
+        temporary.unlink(missing_ok=True)
+    else:
+        temporary.replace(destination)
+    return destination, size, sha
 
 
 def _checkpoint_remote_assets(
@@ -919,9 +1059,7 @@ def _checkpoint_remote_assets(
     descriptors = [
         {
             "url": str(asset.url),
-            "media_type": str(
-                getattr(asset, "media_type", "application/octet-stream")
-            ),
+            "media_type": str(getattr(asset, "media_type", "application/octet-stream")),
             "size_bytes": int(getattr(asset, "size_bytes", 0) or 0),
             "sha256": str(getattr(asset, "sha256", "") or ""),
         }
@@ -959,12 +1097,17 @@ def _ensure_remote_asset(asset: StudioAsset) -> str | None:
         return asset.remote_url
     if not asset.local_path or settings.app_mode.upper() == "DEMO":
         return None
-    from app.repo.pipelines import backend
+    from app.studio.storage_connection import studio_backend
 
+    storage = studio_backend()
+    if storage is None:
+        raise RuntimeError(
+            "Video reference handoff requires Backblaze B2. Connect storage in Studio settings."
+        )
     payload = Path(asset.local_path).read_bytes()
     key = f"studio/{asset.project_id}/imports/{asset.id}/{Path(asset.local_path).name}"
-    backend().put(key, payload, content_type=asset.content_type)
-    asset.remote_url = backend().get_durable_url(key)
+    storage.put(key, payload, content_type=asset.content_type)
+    asset.remote_url = storage.get_durable_url(key)
     return asset.remote_url
 
 
@@ -979,7 +1122,9 @@ def execute_workflow(execution_id: str) -> None:
         graph = WorkflowGraph.model_validate(_load(revision.graph_json, {}))
         node_records = {
             item.node_id: item
-            for item in db.scalars(select(NodeExecution).where(NodeExecution.execution_id == execution.id))
+            for item in db.scalars(
+                select(NodeExecution).where(NodeExecution.execution_id == execution.id)
+            )
         }
         source_records = dict(node_records)
         for node in graph.nodes:
@@ -987,9 +1132,7 @@ def execute_workflow(execution_id: str) -> None:
                 continue
             historical = None
             if execution.resumed_from_execution_id:
-                parent = db.get(
-                    WorkflowExecution, execution.resumed_from_execution_id
-                )
+                parent = db.get(WorkflowExecution, execution.resumed_from_execution_id)
                 for ancestor in _execution_lineage(db, parent):
                     historical = db.scalar(
                         select(NodeExecution).where(
@@ -1057,19 +1200,34 @@ def execute_workflow(execution_id: str) -> None:
                     )
                     db.commit()
                     continue
-                cache_material = _json({"type": node.type, "config": node.config, "inputs": [upstream_keys.get(item) for item in source_ids]})
+                cache_material = _json(
+                    {
+                        "type": node.type,
+                        "config": node.config,
+                        "inputs": [upstream_keys.get(item) for item in source_ids],
+                    }
+                )
                 record.cache_key = hashlib.sha256(cache_material.encode()).hexdigest()
-                cached = None if execution.force_rerun else db.scalar(
-                    select(NodeExecution)
-                    .where(NodeExecution.cache_key == record.cache_key, NodeExecution.status == "SUCCEEDED")
-                    .order_by(NodeExecution.created_at.desc())
+                cached = (
+                    None
+                    if execution.force_rerun
+                    else db.scalar(
+                        select(NodeExecution)
+                        .where(
+                            NodeExecution.cache_key == record.cache_key,
+                            NodeExecution.status == "SUCCEEDED",
+                        )
+                        .order_by(NodeExecution.created_at.desc())
+                    )
                 )
                 if cached and cached.id != record.id:
                     record.status = "CACHED"
                     record.output_json = cached.output_json
                     source_records[node.id] = record
                     upstream_keys[node.id] = cached.cache_key
-                    _event(db, execution, "node.cached", node.id, {"message": f"Reused {node.label}"})
+                    _event(
+                        db, execution, "node.cached", node.id, {"message": f"Reused {node.label}"}
+                    )
                     db.commit()
                     continue
                 record.status = "RUNNING"
@@ -1086,7 +1244,11 @@ def execute_workflow(execution_id: str) -> None:
                     "provider": node.config.get("vendor"),
                     "model": node.config.get("model"),
                     "variants": node.config.get("variants", 1),
-                    "timeout_seconds": 600 if node.type == "image_generation" else 1200 if node.type == "video_generation" else 600,
+                    "timeout_seconds": 600
+                    if node.type == "image_generation"
+                    else 1200
+                    if node.type == "video_generation"
+                    else 600,
                 }
                 _event(db, execution, "node.started", node.id, start_payload)
                 db.commit()
@@ -1101,7 +1263,13 @@ def execute_workflow(execution_id: str) -> None:
                             asset = _demo_svg(project.id, execution.id, node.id, index, prompt)
                             db.add(asset)
                             db.flush()
-                            assets.append({"id": asset.id, "name": asset.name, "content_type": asset.content_type})
+                            assets.append(
+                                {
+                                    "id": asset.id,
+                                    "name": asset.name,
+                                    "content_type": asset.content_type,
+                                }
+                            )
                     else:
                         from app.repo.studio_runtime import generate_images, result_assets
 
@@ -1152,28 +1320,56 @@ def execute_workflow(execution_id: str) -> None:
                         assets = _persist_remote_assets(db, project.id, node.id, durable)
                     output = {"kind": "variant_set", "assets": assets}
                 elif node.type == "asset_selector":
-                    source = next((source_records[item] for item in source_ids if item in source_records), None)
+                    source = next(
+                        (source_records[item] for item in source_ids if item in source_records),
+                        None,
+                    )
                     variants = _load(source.output_json, {}).get("assets", []) if source else []
-                    index = min(int(node.config.get("selected_index", 0)), max(0, len(variants) - 1))
+                    index = min(
+                        int(node.config.get("selected_index", 0)), max(0, len(variants) - 1)
+                    )
                     output = {"kind": "asset", "asset": variants[index] if variants else None}
                 elif node.type == "video_generation":
                     if settings.app_mode.upper() == "DEMO":
-                        output = {"kind": "variant_set", "assets": [], "demo_url": "/demo/noura-glow.mp4", "simulated": True}
+                        output = {
+                            "kind": "variant_set",
+                            "assets": [],
+                            "demo_url": "/demo/noura-glow.mp4",
+                            "simulated": True,
+                        }
                     else:
                         from app.repo.studio_runtime import generate_videos, result_assets
 
                         inputs = _upstream_assets(source_ids, source_records)
-                        image = next((item for item in inputs if str(item.get("content_type", "")).startswith("image/")), None)
-                        if not image or not image.get("url"):
-                            raise RuntimeError("Video generation requires a selected durable image asset")
+                        image = next(
+                            (
+                                item
+                                for item in inputs
+                                if str(item.get("content_type", "")).startswith("image/")
+                            ),
+                            None,
+                        )
+                        if not image:
+                            raise RuntimeError("Video generation requires a selected image asset")
+                        image_record = db.get(StudioAsset, str(image.get("id")))
+                        image_url = (
+                            _ensure_remote_asset(image_record) if image_record else image.get("url")
+                        )
+                        if not image_url:
+                            raise RuntimeError(
+                                "Video generation requires a provider-readable image asset"
+                            )
                         vendor = str(node.config.get("vendor") or settings.video_provider)
                         entry = catalog.resolve(catalog.VIDEO, vendor)
                         model = str(node.config.get("model") or entry.default_model)
                         result = generate_videos(
                             entry,
                             model,
-                            str(node.config.get("prompt_guidance") or "Subtle cinematic subject and camera motion"),
-                            image["url"],
+                            str(
+                                node.config.get("prompt_guidance")
+                                or "Subtle cinematic subject and camera motion"
+                            ),
+                            image_url,
                             int(node.config.get("variants", 1)),
                             float(node.config.get("duration_sec", 5)),
                             effective_provider_secret(vendor),
@@ -1196,8 +1392,14 @@ def execute_workflow(execution_id: str) -> None:
                         result = generate_audio(
                             entry,
                             str(node.config.get("model") or entry.default_model),
-                            str(node.config.get("text") or node.config.get("prompt_guidance") or node.label),
-                            duration_sec=float(node.config.get("duration_sec", 5)) if node.type == "music" else None,
+                            str(
+                                node.config.get("text")
+                                or node.config.get("prompt_guidance")
+                                or node.label
+                            ),
+                            duration_sec=float(node.config.get("duration_sec", 5))
+                            if node.type == "music"
+                            else None,
                             secret=effective_provider_secret(vendor),
                         )
                         durable = _checkpoint_remote_assets(
@@ -1207,13 +1409,31 @@ def execute_workflow(execution_id: str) -> None:
                         output = {"kind": "audio", "assets": assets}
                 elif node.type == "composition":
                     if settings.app_mode.upper() == "DEMO":
-                        output = {"kind": "media", "demo_url": "/demo/noura-glow.mp4", "simulated": True}
+                        output = {
+                            "kind": "media",
+                            "demo_url": "/demo/noura-glow.mp4",
+                            "simulated": True,
+                        }
                     else:
                         from app.repo.composer import compose_studio
 
                         inputs = _upstream_assets(source_ids, source_records)
-                        visual = next((item for item in inputs if str(item.get("content_type", "")).startswith(("image/", "video/"))), None)
-                        audio = [item["url"] for item in inputs if str(item.get("content_type", "")).startswith("audio/") and item.get("url")]
+                        visual = next(
+                            (
+                                item
+                                for item in inputs
+                                if str(item.get("content_type", "")).startswith(
+                                    ("image/", "video/")
+                                )
+                            ),
+                            None,
+                        )
+                        audio = [
+                            item["url"]
+                            for item in inputs
+                            if str(item.get("content_type", "")).startswith("audio/")
+                            and item.get("url")
+                        ]
                         if not visual or not visual.get("url"):
                             raise RuntimeError("Composition requires a selected visual asset")
                         composed = compose_studio(
@@ -1223,9 +1443,7 @@ def execute_workflow(execution_id: str) -> None:
                             execution_id=execution.id,
                             duration_sec=float(node.config.get("duration_sec", 5)),
                         )
-                        durable = _checkpoint_remote_assets(
-                            db, execution, node.id, [composed]
-                        )
+                        durable = _checkpoint_remote_assets(db, execution, node.id, [composed])
                         assets = _persist_remote_assets(db, project.id, node.id, durable)
                         output = {"kind": "media", "assets": assets}
                 elif node.type == "export":
@@ -1246,16 +1464,29 @@ def execute_workflow(execution_id: str) -> None:
                         else None,
                     }
                 elif node.type == "verification":
-                    output = {"kind": "report", "status": "PASS", "checks": ["graph-valid", "asset-present"]}
+                    output = {
+                        "kind": "report",
+                        "status": "PASS",
+                        "checks": ["graph-valid", "asset-present"],
+                    }
                 elif node.type == "look_director":
-                    output = {"kind": "style", "text": "Cohesive cinematic lighting, deliberate palette, consistent subject proportions"}
+                    output = {
+                        "kind": "style",
+                        "text": "Cohesive cinematic lighting, deliberate palette, consistent subject proportions",
+                    }
                 else:
                     output = {"kind": node.type, "value": node.config}
                 record.output_json = _json(output)
                 record.status = "SUCCEEDED"
                 source_records[node.id] = record
                 upstream_keys[node.id] = record.cache_key
-                _event(db, execution, "node.succeeded", node.id, {"message": f"Completed {node.label}", "output": output})
+                _event(
+                    db,
+                    execution,
+                    "node.succeeded",
+                    node.id,
+                    {"message": f"Completed {node.label}", "output": output},
+                )
                 db.commit()
             failed_count = int(
                 db.scalar(
@@ -1279,7 +1510,9 @@ def execute_workflow(execution_id: str) -> None:
                 execution.status = "SUCCEEDED"
                 message = "Workflow completed"
             execution.finished_at = datetime.now(UTC)
-            _event(db, execution, f"execution.{execution.status.lower()}", None, {"message": message})
+            _event(
+                db, execution, f"execution.{execution.status.lower()}", None, {"message": message}
+            )
             db.commit()
         except Exception as exc:
             execution_id_value = execution.id
@@ -1308,7 +1541,9 @@ def execute_workflow(execution_id: str) -> None:
         execute_workflow(execution_id)
 
 
-def import_asset(db: Session, project: StudioProject, filename: str, content_type: str, source) -> StudioAsset:
+def import_asset(
+    db: Session, project: StudioProject, filename: str, content_type: str, source
+) -> StudioAsset:
     kind = next((name for name, (_, types) in MEDIA_LIMITS.items() if content_type in types), None)
     if kind is None:
         raise ValueError("Unsupported media type")
@@ -1356,7 +1591,9 @@ def effective_provider_secret(vendor: str) -> str:
 
 
 def provider_connection_status() -> list[dict]:
-    vendors = sorted({entry.vendor for entries in catalog.CATALOG.values() for entry in entries.values()})
+    vendors = sorted(
+        {entry.vendor for entries in catalog.CATALOG.values() for entry in entries.values()}
+    )
     result = []
     for vendor in vendors:
         try:
@@ -1367,7 +1604,13 @@ def provider_connection_status() -> list[dict]:
             personal = False
         setting = VENDOR_SETTING.get(vendor)
         environment = bool(getattr(settings, setting, "")) if setting else False
-        result.append({"vendor": vendor, "configured": personal or environment, "source": "personal" if personal else "environment" if environment else "none"})
+        result.append(
+            {
+                "vendor": vendor,
+                "configured": personal or environment,
+                "source": "personal" if personal else "environment" if environment else "none",
+            }
+        )
     return result
 
 

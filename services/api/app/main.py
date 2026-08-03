@@ -11,31 +11,33 @@ the event loop via `asyncio.to_thread`. Handlers return Genblaze models
 import asyncio
 import json
 import logging
+import os
 import shutil
 from functools import lru_cache
 from typing import Any
 
 from dotenv import load_dotenv
 
-load_dotenv()
+if os.environ.get("THIKRA_DESKTOP") != "1":
+    load_dotenv()
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import RedirectResponse, Response, StreamingResponse  # noqa: E402
-from genblaze_core.observability.events import (  # noqa: E402
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from genblaze_core.observability.events import (
     PipelineCompletedEvent,
     PipelineFailedEvent,
     StepCompletedEvent,
 )
 
-from app.agents.mcp import mcp_app  # noqa: E402
-from app.commerce.api import router as commerce_router  # noqa: E402
-from app.commerce.discovery import router as discovery_router  # noqa: E402
-from app.config import settings  # noqa: E402
-from app.errors import classify  # noqa: E402
-from app.http_middleware import request_logging  # noqa: E402
-from app.logging_setup import setup_logging  # noqa: E402
-from app.repo import (  # noqa: E402
+from app.agents.mcp import mcp_app
+from app.commerce.api import router as commerce_router
+from app.commerce.discovery import router as discovery_router
+from app.config import settings
+from app.errors import classify
+from app.http_middleware import request_logging
+from app.logging_setup import setup_logging
+from app.repo import (
     backend,
     build_keyframe_pipeline,
     build_media_pipeline,
@@ -46,12 +48,12 @@ from app.repo import (  # noqa: E402
     sink,
     snap_scene_durations,
 )
-from app.repo import provider_catalog as catalog  # noqa: E402
-from app.repo.composer import compose_final  # noqa: E402
-from app.startup import application_lifespan  # noqa: E402
-from app.studio import router as studio_router  # noqa: E402
-from app.thikra import router as thikra_router  # noqa: E402
-from app.types.api import MediaRequest, PromptRequest, ProviderChoice  # noqa: E402
+from app.repo import provider_catalog as catalog
+from app.repo.composer import compose_final
+from app.startup import application_lifespan
+from app.studio.api import router as studio_router
+from app.thikra.api import router as thikra_router
+from app.types.api import MediaRequest, PromptRequest, ProviderChoice
 
 setup_logging(settings.log_level)
 logger = logging.getLogger("api.main")
@@ -85,6 +87,12 @@ app.include_router(discovery_router)
 app.include_router(studio_router)
 app.mount("/mcp", mcp_app)
 app.middleware("http")(request_logging)
+
+
+@app.get("/health/ready")
+def readiness():
+    """Cheap loopback readiness probe with no provider or B2 network calls."""
+    return {"status": "ready", "desktop": os.environ.get("THIKRA_DESKTOP") == "1"}
 
 
 _sse_log = logging.getLogger("api.sse")

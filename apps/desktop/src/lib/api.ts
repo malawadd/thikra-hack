@@ -1,4 +1,14 @@
-const API = 'http://127.0.0.1:43192';
+let API = 'http://127.0.0.1:43192';
+
+export function configureApi(baseUrl: string): void {
+  const parsed = new URL(baseUrl);
+  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1') {
+    throw new Error('The Studio API must use the local loopback address.');
+  }
+  API = parsed.origin;
+}
+
+export const apiBaseUrl = () => API;
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }

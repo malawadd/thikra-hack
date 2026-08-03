@@ -2,7 +2,7 @@
 
 Thikra is a verify-then-pay creative-commerce application. A brand manager turns a brief into a versioned mandate, compares Genblaze providers, grants a bounded Prava authorization, reviews generation and verification evidence, and either accepts delivery, retries a failed component, rejects it, or opens a redress case.
 
-The active products are a SvelteKit 2 / Svelte 5 web application and **Thikra Studio**, a Windows-first Tauri 2 creative workspace. The original Next.js frontend is retained under `reference/next-web` only for migration history. FastAPI remains authoritative; Genblaze remains the provider orchestration layer; Backblaze B2 remains the durable media store; ffmpeg remains the sole composition surface.
+The active products are a SvelteKit 2 / Svelte 5 web application and **Thikra Studio**, a Windows-first Tauri 2 creative workspace. The original Next.js frontend is retained under `reference/next-web` only for migration history. FastAPI remains authoritative; Genblaze remains the provider orchestration layer; Backblaze B2 remains the web/commerce durable media store and an optional Studio cloud connection; ffmpeg remains the sole composition surface.
 
 ## Product preview
 
@@ -22,7 +22,7 @@ The responsive command center is also verified at a 390×844 mobile viewport: [m
 - B2 media metadata, lineage, hashes, server-side short-lived downloads, and one evidence JSON adapter.
 - SSE with stable envelopes, deterministic IDs, resume cursor, deduplication, reconnect backoff, and polling fallback.
 - Paid-workflow resume from failed/cancelled nodes with a fresh remaining-cost confirmation, parent execution lineage, and durable provider-output recovery.
-- Generate/Edit desktop workspaces with a shared asset bin, independently versioned multi-track sequences, proxy preview, titles/captions/audio, resumable render progress, B2 exports, and narrow native Windows Save As.
+- Generate/Edit desktop workspaces with a shared local asset bin, independently versioned multi-track sequences, proxy preview, titles/captions/audio, resumable render progress, optional B2 copies, and narrow native Windows Save As.
 - Layered verification records, with real Pillow/ffprobe inspection for non-demo delivery.
 - Backend-enforced retry budgets, approval/rejection policy, redress cases, and a tamper-evident SHA-256 audit chain.
 - Complete Overview, New Brief, Runs, Asset Library, Evidence, Payments, Cases, and Integrations routes.
@@ -30,7 +30,7 @@ The responsive command center is also verified at a 390×844 mobile viewport: [m
 
 ## Quick start
 
-Prerequisites: Node.js 20+, pnpm 9+, Python 3.11+, [uv](https://docs.astral.sh/uv/), and ffmpeg/ffprobe on `PATH`.
+Source-development prerequisites: Node.js 20+, pnpm 9+, Python 3.11+, [uv](https://docs.astral.sh/uv/), and ffmpeg/ffprobe on `PATH`. Users installing the Windows v0.1.1 MSI or setup EXE need none of these tools.
 
 ```powershell
 Copy-Item .env.example .env
@@ -52,7 +52,7 @@ pnpm setup:desktop
 pnpm dev:desktop
 ```
 
-This launches the Tauri shell, the static Svelte renderer, and the loopback FastAPI service together. The desktop includes the ComfyUI-inspired Generate canvas and a short-form multi-track Edit workspace. It does not bundle Python or ffmpeg yet. Studio project/sequence metadata and editing proxies remain local; provider overrides are stored in Windows Credential Manager; generated and rendered production media continues to use configured B2 storage. See [Thikra Studio](docs/features/desktop-studio.md).
+This launches the source-development Tauri shell, static Svelte renderer, and loopback FastAPI service together. The desktop includes the ComfyUI-inspired Generate canvas and a short-form multi-track Edit workspace. Packaged Windows builds include their own frozen API, migrations, FFmpeg/FFprobe, and Noto fonts. Studio projects, provider outputs, proxies, and renders remain local by default; provider and optional B2 overrides are stored in Windows Credential Manager. See [Thikra Studio](docs/features/desktop-studio.md) and [Releases](docs/RELEASES.md).
 
 ## Runtime modes
 
@@ -80,7 +80,9 @@ pnpm demo:human        run the human marketplace demonstration
 pnpm seed:commerce     seed the commerce catalog and demo developer identity
 pnpm build             build the SvelteKit Node application
 pnpm build:desktop:renderer build the desktop static renderer
-pnpm build:desktop     produce the Windows Tauri package
+pnpm build:desktop     freeze the API, verify FFmpeg/fonts, and build MSI + NSIS
+pnpm smoke:desktop:runtime verify the frozen API with developer tools removed from PATH
+pnpm audit:desktop:bundle audit resources and produce installer SHA-256 hashes
 pnpm lint              ESLint + Ruff
 pnpm typecheck         svelte-check
 pnpm test              backend and frontend unit/integration tests

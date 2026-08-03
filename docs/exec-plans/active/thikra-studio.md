@@ -1,6 +1,6 @@
 # Thikra Studio execution plan
 
-Status: milestone 1 implemented and validated. The optional packaged WebDriver smoke remains environment-gated because `tauri-driver` and `msedgedriver` are not installed on the build machine; both Windows installers were produced successfully.
+Status: creative workflow/editor milestone implemented. Self-contained Windows packaging is tracked in `desktop-self-contained-v0.1.1.md`.
 
 ## Delivered
 
@@ -15,4 +15,4 @@ Status: milestone 1 implemented and validated. The optional packaged WebDriver s
 
 - Magic-link/deep-link web account connection and cloud synchronization.
 - Multi-user collaboration, arbitrary script/plugin nodes, mask painting/inpainting, and nonlinear timeline editing.
-- Prava project-level authorization, production signing, auto-update, and bundled Python/ffmpeg installation.
+- Prava project-level authorization, production signing, and auto-update. Python/FFmpeg bundling is part of v0.1.1.

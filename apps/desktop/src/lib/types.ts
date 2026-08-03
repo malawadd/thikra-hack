@@ -14,6 +14,7 @@ export interface Execution { id: string; revision_id: string; status: string; es
 export interface StudioAsset { id: string; name: string; asset_type?: string; content_type: string; content_url?: string; thumbnail_url?: string; proxy_url?: string; size?: number; width?: number; height?: number; duration_ms?: number; frame_rate?: string; has_audio?: boolean; source_kind?: 'IMPORTED'|'GENERATED'|'RENDERED'; analysis_status?: 'PENDING'|'RUNNING'|'READY'|'FAILED'; created_at?: string; }
 export interface StudioEvent { eventId: string; executionId: string; revisionId: string; nodeId: string | null; type: string; status: string; message: string; progress?: number | null; data: Record<string, unknown>; estimatedCostMinor: number; }
 export interface ProviderConnection { vendor: string; configured: boolean; source: 'personal' | 'environment' | 'none'; }
+export interface StorageConnection { mode:'local'|'b2'; configured:boolean; source:'personal'|'environment'|'none'; region:string; bucket_name:string; key_id_hint:string; }
 export interface ProviderOption { vendor: string; default_model: string; suggested_models: string[]; modality: string; key_available: boolean; credential_source: 'personal' | 'environment' | 'none'; supports_seed: boolean; supports_reference_input: boolean; supports_text_only: boolean; duration_grid: number[] | null; }
 export type ProviderMatrix = Record<'chat' | 'image' | 'video' | 'tts' | 'music', ProviderOption[]>;
 

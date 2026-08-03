@@ -158,6 +158,13 @@ class ProviderConnectionSet(StrictModel):
     secret: str = Field(min_length=6, max_length=1000)
 
 
+class StorageConnectionSet(StrictModel):
+    region: str = Field(min_length=1, max_length=80)
+    key_id: str = Field(min_length=1, max_length=300)
+    application_key: str = Field(min_length=1, max_length=1000)
+    bucket_name: str = Field(min_length=1, max_length=180)
+
+
 SequencePreset = Literal[
     "landscape_720",
     "landscape_1080",

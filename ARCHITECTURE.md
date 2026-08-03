@@ -2,7 +2,7 @@
 
 FastAPI owns policy and state. SvelteKit is a same-origin presentation/BFF layer and never receives server secrets. Existing Genblaze catalog, pipeline, storage sink, lineage, and ffmpeg composition code remain the media execution path.
 
-Thikra Studio is a second Svelte 5 surface inside a restrictive Tauri 2 shell. It talks directly to FastAPI over `127.0.0.1:43192`; the API accepts only exact development origins and never binds Studio to a public interface. Semantic graph snapshots are immutable while positions and viewport are stored independently. Multi-track sequence snapshots follow the same rule: content and renders reference immutable revisions, while playhead, zoom, layout, and selection remain mutable view state.
+Thikra Studio is a second Svelte 5 surface inside a restrictive Tauri 2 shell. Development uses `127.0.0.1:43192`; the packaged shell chooses an available loopback port and returns it through a narrow bootstrap command. The API never binds publicly. The Windows package owns a frozen Python API and bundled FFmpeg process tree through a kill-on-close Job Object, applies migrations before readiness, and keeps database, assets, proxies, cache, and rotating logs below the Tauri application-data directory. Semantic graph snapshots are immutable while positions and viewport are stored independently. Multi-track sequence snapshots follow the same rule: content and renders reference immutable revisions, while playhead, zoom, layout, and selection remain mutable view state.
 
 ```mermaid
 flowchart LR
@@ -13,7 +13,8 @@ flowchart LR
     AG --> CHAT["genblaze_openai.chat"]
     EX --> CAT["Provider catalog capabilities"]
     CAT --> GEN["Genblaze pipelines"]
-    GEN --> B2["Backblaze B2 assets + manifests"]
+    GEN --> LOCAL["Hashed local Studio assets"]
+    LOCAL -. "optional copy / reference handoff" .-> B2["Backblaze B2 via genblaze-s3"]
     EX --> COMP["composer.py only ffmpeg surface"]
     API --> SEQ["Immutable sequence revisions"]
     SEQ --> PREVIEW["Hash-keyed thumbnails + 720p proxies"]
@@ -21,6 +22,8 @@ flowchart LR
     RENDER --> COMP
     API --> SQL["Local SQLite metadata"]
     API --> KR["Windows Credential Manager"]
+    SHELL["Tauri lifecycle manager"] --> API
+    SHELL --> BIN["Frozen API + FFmpeg + Noto resources"]
 ```
 
 ```mermaid

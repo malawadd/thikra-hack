@@ -10,7 +10,6 @@ for (const command of ['tauri-driver', 'msedgedriver']) {
 
 const root = resolve(import.meta.dirname, '..');
 const application = resolve(root, 'apps/desktop/src-tauri/target/release/thikra-studio.exe');
-const api = spawn(process.execPath, ['scripts/run-api.mjs'], { cwd: root, env: { ...process.env, APP_MODE: 'DEMO' }, stdio: 'ignore' });
 const driver = spawn('tauri-driver', ['--port', '4444'], { cwd: root, stdio: 'ignore' });
 let sessionId;
 
@@ -23,7 +22,6 @@ async function waitFor(url, attempts = 80) {
 }
 
 try {
-  await waitFor('http://127.0.0.1:43192/health');
   await waitFor('http://127.0.0.1:4444/status');
   const created = await fetch('http://127.0.0.1:4444/session', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -38,5 +36,5 @@ try {
   console.log('Thikra Studio packaged WebDriver smoke test passed.');
 } finally {
   if (sessionId) await fetch(`http://127.0.0.1:4444/session/${sessionId}`, { method: 'DELETE' }).catch(() => {});
-  driver.kill(); api.kill();
+  driver.kill();
 }

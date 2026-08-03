@@ -6,8 +6,8 @@ Thikra Studio is the local, Windows-first creative workflow surface. **Generate*
 
 - Tauri 2 shell with a statically rendered Svelte 5/SvelteKit application.
 - Local single-user SQLite projects; no sign-in, collaboration, or cloud project sync.
-- Loopback-only FastAPI integration. Python and ffmpeg remain separate prerequisites.
-- Generated production assets and Genblaze manifests remain in configured B2 storage. DEMO renders are clearly fixture-backed.
+- Loopback-only FastAPI integration. Source development uses separately installed Python and ffmpeg; Windows v0.1.1 packages both runtimes.
+- Provider results are ingested into hashed local project storage immediately. Backblaze B2 is optional for cloud copies and required only for provider-readable local image handoff. Existing web/commerce B2 execution is unchanged.
 - Personal provider overrides are stored through the operating-system credential store and take precedence over environment configuration; plaintext is never stored in SQLite or returned by the API.
 - Generation-node provider dropdowns show only vendors currently connected by an environment or personal credential. Their dependent model dropdowns are populated from that provider's curated catalog entry and refresh immediately when credentials change.
 
@@ -23,7 +23,7 @@ Sequence content is immutable: pointer gestures commit on pointer-up, field edit
 
 Imports now include PNG/JPEG/WebP, MP4/WebM/MOV, and WAV/MP3/M4A. Lazy analysis records duration, dimensions, frame rate, and audio presence, then creates hash/version-keyed thumbnails, waveforms, and maximum-720p editing proxies without modifying originals. Generation remains provider-funded and returns to the shared reviewable library; inserting or editing an existing asset has no provider charge.
 
-Exports consume an exact sequence revision and preset, emit 30 fps H.264 `yuv420p` plus AAC 48 kHz stereo when audio exists, upload MP4 and optional SRT to B2, and cache identical successful renders by revision/preset/input hashes. Stable render events report preparation, encoding, upload, cancellation, failure, and completion. Failed or interrupted renders can be retried without replacing earlier exports. The Tauri `Save As…` command validates a Studio asset ID, opens the native dialog itself, and streams only that loopback asset to the single user-approved path; no broad filesystem permission is granted.
+Exports consume an exact sequence revision and preset, emit 30 fps H.264 `yuv420p` plus AAC 48 kHz stereo when audio exists, save MP4 and optional SRT locally, optionally copy them to connected B2 storage, and cache identical successful renders by revision/preset/input hashes. Stable render events report preparation, encoding, saving, cancellation, failure, and completion. Failed or interrupted renders can be retried without replacing earlier exports. The Tauri `Save As…` command validates a Studio asset ID, opens the native dialog itself, and streams only that loopback asset to the single user-approved path; no broad filesystem permission is granted.
 
 ## Graph and revision contract
 
@@ -58,8 +58,12 @@ pnpm setup:desktop
 pnpm dev:desktop
 pnpm build:desktop:renderer
 pnpm build:desktop
+pnpm smoke:desktop:runtime
+pnpm audit:desktop:bundle
 pnpm test:desktop
 pnpm test:desktop:e2e:windows
 ```
 
-The Windows WebDriver smoke command requires `tauri-driver` and the matching Microsoft Edge WebDriver on `PATH`. Production signing, auto-update, a bundled Python/ffmpeg runtime, magic-link account connection, and Prava project authorization are later milestones.
+`pnpm build:desktop` first creates a PyInstaller 6.21 one-folder API, verifies the pinned GPL FFmpeg 8.1.2 archive and its `libx264`/`libass` configuration, stages checked Noto fonts and notices, then builds MSI and NSIS installers. At runtime Tauri selects the port, starts the API without a console, monitors readiness, offers restart/log diagnostics, and terminates the API plus owned FFmpeg descendants when the app closes. A second launch focuses the existing window.
+
+The Windows WebDriver smoke command requires `tauri-driver` and the matching Microsoft Edge WebDriver on `PATH`. Production signing, auto-update, magic-link account connection, and Prava project authorization remain later milestones. v0.1.1 is unsigned, so SmartScreen may warn.

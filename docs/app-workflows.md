@@ -13,7 +13,8 @@ sequenceDiagram
     participant API as Loopback FastAPI
     participant Agent as OpenAI catalog chat
     participant Runtime as Genblaze runtime
-    participant B2
+    participant Local as Local hashed storage
+    participant B2 as Optional B2
     User->>Desktop: Edit graph and references
     Desktop->>API: Save semantic revision
     Desktop->>API: Request proposal + selected assets
@@ -24,7 +25,11 @@ sequenceDiagram
     Desktop->>API: Estimate
     User->>Desktop: Confirm cost and run
     API->>Runtime: Execute dirty DAG branches
-    Runtime->>B2: Assets and manifests
+    Runtime-->>API: Provider assets and Genblaze lineage
+    API->>Local: Ingest provider outputs immediately
+    opt B2 connected or remote image handoff required
+        API->>B2: Upload through genblaze-s3
+    end
     API-->>Desktop: Resumable per-node SSE
 ```
 

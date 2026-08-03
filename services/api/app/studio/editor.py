@@ -472,12 +472,19 @@ def execute_render(render_id: str) -> None:
                 name=f"{render.preset} export.mp4",
                 asset_type="video",
                 content_type="video/mp4",
-                remote_url=output.url,
+                local_path=output.url,
                 size=output.size_bytes or 0,
                 sha256=output.sha256 or render.render_hash,
                 source_kind="RENDERED",
                 analysis_status="PENDING",
             )
+            from app.studio.storage_connection import studio_backend
+
+            storage = studio_backend()
+            if storage is not None:
+                key = f"studio/{render.project_id}/renders/{render.id}/final.mp4"
+                storage.put(key, Path(output.url).read_bytes(), content_type="video/mp4")
+                output_record.remote_url = storage.get_durable_url(key)
             db.add(output_record)
             db.flush()
             render.output_asset_id = output_record.id
@@ -487,12 +494,20 @@ def execute_render(render_id: str) -> None:
                     name=f"{render.preset} captions.srt",
                     asset_type="caption",
                     content_type="application/x-subrip",
-                    remote_url=srt.url,
+                    local_path=srt.url,
                     size=srt.size_bytes or 0,
                     sha256=srt.sha256 or "",
                     source_kind="RENDERED",
                     analysis_status="READY",
                 )
+                if storage is not None:
+                    srt_key = f"studio/{render.project_id}/renders/{render.id}/captions.srt"
+                    storage.put(
+                        srt_key,
+                        Path(srt.url).read_bytes(),
+                        content_type="application/x-subrip",
+                    )
+                    srt_record.remote_url = storage.get_durable_url(srt_key)
                 db.add(srt_record)
                 db.flush()
                 render.srt_asset_id = srt_record.id

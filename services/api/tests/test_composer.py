@@ -102,8 +102,6 @@ def test_editor_render_layers_transforms_audio_captions_and_srt(tmp_path: Path) 
             },
         ],
     }
-    fake_backend = MagicMock()
-    fake_backend.get_durable_url.side_effect = lambda key: f"https://b2.test/{key}"
     calls = []
 
     def fake_run(args, duration_ms, on_progress, cancelled):
@@ -111,9 +109,9 @@ def test_editor_render_layers_transforms_audio_captions_and_srt(tmp_path: Path) 
         Path(args[-1]).write_bytes(b"editor-mp4")
 
     with (
-        patch.object(composer, "backend", return_value=fake_backend),
         patch.object(composer, "_run_editor_ffmpeg", side_effect=fake_run),
         patch.object(composer.shutil, "which", return_value="ffmpeg"),
+        patch.object(composer.settings, "thikra_data_dir", str(tmp_path / "data")),
     ):
         video, srt = composer.render_studio_sequence(
             document,
@@ -131,7 +129,8 @@ def test_editor_render_layers_transforms_audio_captions_and_srt(tmp_path: Path) 
     assert "anullsrc" in graph  # exported MP4 always includes an AAC track
     assert video.media_type == "video/mp4"
     assert srt is not None and srt.media_type == "application/x-subrip"
-    assert fake_backend.put.call_count == 2
+    assert Path(video.url).read_bytes() == b"editor-mp4"
+    assert "Welcome" in Path(srt.url).read_text(encoding="utf-8")
 
 
 def _make_spec(n: int = 3) -> StoryboardSpec:

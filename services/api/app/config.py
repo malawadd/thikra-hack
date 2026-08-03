@@ -4,6 +4,7 @@ Standardised B2_* env var names per parent CLAUDE.md §3.
 All provider keys + model overrides live here.
 """
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
@@ -134,7 +135,11 @@ class Settings(BaseSettings):
     # setting just invites drift between env, code, and the run command.
     api_cors_origins: str = "http://localhost:3000,http://localhost:3001"
 
-    model_config = {"env_file": str(_ROOT_ENV), "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {
+        "env_file": None if os.environ.get("THIKRA_DESKTOP") == "1" else str(_ROOT_ENV),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     @property
     def cors_origins(self) -> list[str]:

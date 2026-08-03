@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   windows:
-    name: Build Windows installers
+    name: Build and verify self-contained Windows installers
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     steps:
       - name: Check out release source
@@ -21,36 +21,118 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.13.1
 
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.17.1
           cache: pnpm
 
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.13.5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.8.3
+
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+
+      - name: Verify release version
+        shell: pwsh
+        run: |
+          $version = (Get-Content apps/desktop/package.json | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match desktop version v$version"
+          }
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build and publish Thikra Studio
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install locked API dependencies
+        run: uv sync --project services/api --all-groups --frozen
+
+      - name: Validate application
+        run: |
+          pnpm typecheck
+          pnpm test
+          pnpm check:structure
+
+      - name: Build embedded runtime and installers
+        run: pnpm build:desktop
+
+      - name: Smoke frozen runtime without developer tools on PATH
+        run: pnpm smoke:desktop:runtime
+
+      - name: Smoke packaged lifecycle and dynamic port
+        run: pnpm smoke:desktop:shell
+
+      - name: Audit bundle and generate checksums
+        run: pnpm audit:desktop:bundle
+
+      - name: Install Tauri WebDriver
+        run: cargo install tauri-driver --locked
+
+      - name: Install matching Microsoft Edge WebDriver
+        shell: pwsh
+        run: |
+          $edgePaths = @(
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+          )
+          $edge = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $edge) {
+            throw "Microsoft Edge is not installed on the Windows runner"
+          }
+
+          $version = (Get-Item $edge).VersionInfo.ProductVersion
+          $driverDirectory = Join-Path $env:RUNNER_TEMP "msedgedriver-$version"
+          $archive = Join-Path $env:RUNNER_TEMP "edgedriver_win64.zip"
+          Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $driverDirectory -Force
+          $driver = Get-ChildItem $driverDirectory -Recurse -Filter msedgedriver.exe |
+            Select-Object -First 1
+          if (-not $driver) {
+            throw "The Edge WebDriver archive did not contain msedgedriver.exe"
+          }
+          $driver.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "MSEDGEDRIVER_TELEMETRY_OPTOUT=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Smoke packaged desktop shell
+        run: node scripts/test-desktop-webdriver.mjs
+
+      - name: Upload verified build for diagnostics
+        uses: actions/upload-artifact@v4
         with:
-          projectPath: apps/desktop
-          tagName: v__VERSION__
-          releaseName: Thikra Studio v__VERSION__
-          releaseBody: |
-            Windows installers for Thikra Studio.
+          name: thikra-studio-${{ github.ref_name }}-windows-x64
+          path: artifacts/desktop-release/*
+          if-no-files-found: error
 
-            This milestone includes the layered timeline, vertical clip movement,
-            draggable compositing tracks, and direct move/resize/rotate controls in
-            the program monitor.
-
-            The local FastAPI service and ffmpeg must still be installed and launched
-            separately for this milestone.
-          releaseDraft: false
+      - name: Publish verified release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Thikra Studio ${{ github.ref_name }}
           prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: artifacts/desktop-release/*
+          body: |
+            Thikra Studio for Windows 10/11 x64.
+
+            This is the first self-contained release. Both installers include the
+            Tauri/Svelte application, frozen FastAPI engine, SQLite migrations,
+            FFmpeg/FFprobe with libx264 and libass, and bundled Noto fonts. Python,
+            Node.js, Rust, uv, and a system FFmpeg installation are not required.
+
+            DEMO mode works immediately and stores projects locally. Real generation
+            needs provider credentials entered in Settings. Backblaze B2 is optional
+            and is required only when a provider must fetch a local image reference.
+
+            This build is unsigned, so Windows SmartScreen may show a warning.
+            Verify downloads with SHA256SUMS.txt.

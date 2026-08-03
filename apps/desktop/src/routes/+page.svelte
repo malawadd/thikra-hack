@@ -1,15 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { SvelteSet } from 'svelte/reactivity';
   import { addEdge, Background, BackgroundVariant, Controls, MiniMap, SvelteFlow, SvelteFlowProvider, type Connection, type Edge, type Node } from '@xyflow/svelte';
   import { Bot, Check, ChevronDown, CircleDollarSign, CloudOff, Command, Film, FolderOpen, History, ImagePlus, KeyRound, LoaderCircle, PanelRightClose, Play, Plus, Redo2, Save, Settings, Sparkles, Trash2, Undo2, X } from 'lucide-svelte';
   import StudioNode from '$lib/StudioNode.svelte';
   import EditorWorkspace from '$lib/EditorWorkspace.svelte';
-  import { api, ApiError, assetUrl, studioEvents } from '$lib/api';
+  import { api, ApiError, assetUrl, configureApi, studioEvents } from '$lib/api';
   import { fromFlow, operationClosure, PORTS, toFlowEdges, toFlowNodes, validateConnection } from '$lib/graph';
-  import type { CatalogNode, Estimate, Execution, NodeStatus, Project, Proposal, ProviderConnection, ProviderMatrix, Revision, StudioAsset, StudioEvent, WorkflowNode } from '$lib/types';
+  import type { CatalogNode, Estimate, Execution, NodeStatus, Project, Proposal, ProviderConnection, ProviderMatrix, Revision, StorageConnection, StudioAsset, StudioEvent, WorkflowNode } from '$lib/types';
 
   let online = false, loading = true, saving = false, running = false, inspectorOpen = true;
+  type RuntimeInfo = { apiBaseUrl:string; status:string; managed:boolean; logPath:string; diagnostic:string };
+  let runtimeInfo: RuntimeInfo | null = null;
   let workspaceMode: 'generate' | 'edit' = 'generate';
   let error = '', notice = '';
   let project: Project | null = null;
@@ -22,12 +25,52 @@
   let activity: StudioEvent[] = [], projectAssets: StudioAsset[] = [], variantAssets: StudioAsset[] = [], showVariants = false, showOutput = false, showLibrary = false;
   let showSettings = false, projects: Project[] = [], connections: ProviderConnection[] = [];
   let newProjectName = '', providerVendor = 'openai', providerSecret = '';
+  let storageConnection: StorageConnection | null = null;
+  let b2Region = '', b2KeyId = '', b2ApplicationKey = '', b2BucketName = '';
   let annotationAsset: StudioAsset | null = null, annotationBody = '', annotationKind: 'point' | 'rectangle' = 'point';
   let annotationGeometry: Record<string, number> | null = null;
   let history: { nodes: Node[]; edges: Edge[] }[] = [], historyIndex = -1;
   let fileInput: HTMLInputElement;
   let eventSource: EventSource | null = null;
   const nodeTypes = { studio: StudioNode };
+
+  function isTauri() { return '__TAURI_INTERNALS__' in window; }
+
+  async function waitForRuntime(): Promise<RuntimeInfo> {
+    if (!isTauri()) {
+      const development = { apiBaseUrl:'http://127.0.0.1:43192', status:'development', managed:false, logPath:'', diagnostic:'' };
+      configureApi(development.apiBaseUrl);
+      return development;
+    }
+    const deadline = Date.now() + 45_000;
+    let current = await invoke<RuntimeInfo>('desktop_runtime_info');
+    while (!['ready', 'failed'].includes(current.status) && Date.now() < deadline) {
+      runtimeInfo = current;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      current = await invoke<RuntimeInfo>('desktop_runtime_info');
+    }
+    if (current.status !== 'ready') throw new Error(current.diagnostic || 'The embedded creative engine did not become ready.');
+    configureApi(current.apiBaseUrl);
+    return current;
+  }
+
+  async function startStudio() {
+    loading = true; online = false; error = '';
+    try { runtimeInfo = await waitForRuntime(); await bootstrap(); }
+    catch (cause) { loading = false; online = false; error = cause instanceof Error ? cause.message : 'The creative engine could not start.'; }
+  }
+
+  async function restartEngine() {
+    loading = true; error = '';
+    try { runtimeInfo = await invoke<RuntimeInfo>('restart_desktop_runtime'); await startStudio(); }
+    catch (cause) { loading = false; error = cause instanceof Error ? cause.message : 'The creative engine could not restart.'; }
+  }
+
+  async function copyDiagnostic() {
+    const diagnostic = `Thikra Studio 0.1.1\nStatus: ${runtimeInfo?.status ?? 'unknown'}\nEngine: ${runtimeInfo?.apiBaseUrl ?? 'unavailable'}\nLogs: ${runtimeInfo?.logPath ?? 'unavailable'}\n${runtimeInfo?.diagnostic || error}`;
+    await navigator.clipboard.writeText(diagnostic);
+    notice = 'Diagnostic copied';
+  }
 
   $: selectedNode = nodes.find((item) => item.id === selectedNodeId) ?? null;
   $: budgetPercent = project ? Math.min(100, Math.round((project.spent_minor / Math.max(1, project.budget_cap_minor)) * 100)) : 0;
@@ -93,12 +136,27 @@
     await api(`/studio/projects/${item.id}`, { method: 'DELETE' }); await refreshProjects();
     if (project?.id === item.id) { if (projects.length) await loadProject(projects[0].id); else { newProjectName = 'Untitled creative'; await createStudioProject(); } }
   }
-  async function openSettings() { connections = (await api<{ items: ProviderConnection[] }>('/studio/provider-connections')).items; showSettings = true; }
+  async function openSettings() {
+    [connections, storageConnection] = await Promise.all([
+      api<{ items: ProviderConnection[] }>('/studio/provider-connections').then((value)=>value.items),
+      api<StorageConnection>('/studio/storage-connection')
+    ]);
+    b2Region = storageConnection.region; b2BucketName = storageConnection.bucket_name;
+    showSettings = true;
+  }
   async function saveProviderSecret() {
     if (!providerSecret.trim()) return;
     await api(`/studio/provider-connections/${providerVendor}`, { method: 'PUT', body: JSON.stringify({ secret: providerSecret }) }); providerSecret = ''; await refreshNodeCatalog(); await openSettings(); notice = 'Personal provider key stored in Windows Credential Manager';
   }
   async function clearProviderSecret(vendor: string) { await api(`/studio/provider-connections/${vendor}`, { method: 'DELETE' }); await refreshNodeCatalog(); await openSettings(); }
+  async function saveStorageConnection() {
+    storageConnection = await api<StorageConnection>('/studio/storage-connection', { method:'PUT', body:JSON.stringify({region:b2Region,key_id:b2KeyId,application_key:b2ApplicationKey,bucket_name:b2BucketName}) });
+    b2KeyId = ''; b2ApplicationKey = ''; notice = 'B2 connection stored in Windows Credential Manager';
+  }
+  async function clearStorageConnection() {
+    storageConnection = await api<StorageConnection>('/studio/storage-connection', {method:'DELETE'});
+    b2Region = ''; b2KeyId = ''; b2ApplicationKey = ''; b2BucketName = ''; notice = 'Studio returned to local-only storage';
+  }
   function applyProject(value: Project) {
     project = value; nodes = toFlowNodes(value.revision.graph, value.layout); edges = toFlowEdges(value.revision.graph.edges);
     history = [cloneState()]; historyIndex = 0; selectedNodeId = null; proposal = null; estimate = null; resumeEstimate = null;
@@ -264,7 +322,7 @@
     annotationBody = ''; annotationGeometry = null; notice = 'Feedback saved and available to the agent';
   }
 
-  onMount(() => { bootstrap(); return () => eventSource?.close(); });
+  onMount(() => { startStudio(); return () => eventSource?.close(); });
 </script>
 
 <svelte:head><title>Thikra Studio</title></svelte:head>
@@ -272,7 +330,7 @@
 {#if loading}
   <main class="connection-screen"><LoaderCircle class="spin" size={28} /><h1>Opening Thikra Studio</h1><p>Connecting to the local creative runtime…</p></main>
 {:else if !online}
-  <main class="connection-screen"><CloudOff size={34} /><h1>Local Studio is offline</h1><p>{error}</p><code>pnpm dev:desktop</code><button class="primary" onclick={bootstrap}>Try again</button></main>
+  <main class="connection-screen"><CloudOff size={34} /><h1>Creative engine needs attention</h1><p>{error}</p>{#if runtimeInfo?.logPath}<code>{runtimeInfo.logPath}</code>{/if}<div class="startup-actions"><button class="primary" onclick={restartEngine}>Restart engine</button>{#if isTauri()}<button class="subtle" onclick={()=>invoke('open_runtime_logs')}>Open logs</button><button class="subtle" onclick={copyDiagnostic}>Copy diagnostic</button>{:else}<button class="primary" onclick={startStudio}>Try again</button>{/if}</div></main>
 {:else}
   <div class="studio-shell">
     <header class="titlebar">
@@ -374,4 +432,6 @@
 
 {#if showVariants}<div class="modal-backdrop" role="presentation"><section class="variant-modal"><header><div><span class="eyebrow">LOOK REVIEW</span><h2>Choose the frame worth building on</h2><p>Generated images stay in this project. Pinning saves a revision and prepares a targeted animation cost.</p></div><button class="icon-btn" onclick={()=>showVariants=false}><X size={18}/></button></header><div class="annotation-tools"><select bind:value={annotationKind}><option value="point">Point feedback</option><option value="rectangle">Rectangle feedback</option></select><input bind:value={annotationBody} placeholder="What should the agent change here?"/><button class="subtle" onclick={saveAnnotation} disabled={!annotationGeometry || !annotationBody.trim()}><Check size={14}/>Save feedback</button></div><div class="variant-grid">{#each variantAssets as asset,index}<article class="variant-card"><button class="image-review" aria-label={`Annotate variant ${index+1}`} onclick={(event)=>placeAnnotation(event,asset)}><img src={assetUrl(asset.id)} alt={asset.name}/>{#if annotationAsset?.id===asset.id && annotationGeometry}<i class:rectangle={annotationKind==='rectangle'} style={`left:${annotationGeometry.x*100}%;top:${annotationGeometry.y*100}%;width:${(annotationGeometry.width ?? 0)*100}%;height:${(annotationGeometry.height ?? 0)*100}%`}></i>{/if}</button><div><span>Variant {index+1}</span><small>{asset.name}</small><button onclick={()=>pinVariant(index)}>Pin & prepare animation</button></div></article>{/each}</div></section></div>{/if}
 
-{#if showSettings}<div class="modal-backdrop" role="presentation"><section class="settings-modal"><header><div><span class="eyebrow">LOCAL WORKSPACE</span><h2>Projects & provider connections</h2><p>Keys stay in Windows Credential Manager. Plaintext is never returned by the API.</p></div><button class="icon-btn" onclick={()=>showSettings=false}><X size={18}/></button></header><div class="settings-columns"><section><h3>Projects</h3>{#each projects as item}<div class="project-row" class:active={item.id===project?.id}><input value={item.name} onchange={(event)=>item.id===project?.id && renameProject((event.currentTarget as HTMLInputElement).value)} readonly={item.id!==project?.id}/><button class="subtle" onclick={()=>{loadProject(item.id);showSettings=false}}>Open</button><button class="icon-btn danger-icon" title="Delete project" onclick={()=>removeProject(item)}><Trash2 size={14}/></button></div>{/each}<div class="create-row"><input bind:value={newProjectName} placeholder="New project name"/><button class="primary" onclick={createStudioProject}><Plus size={14}/>Create</button></div></section><section><h3>Provider credentials</h3><div class="connection-list">{#each connections as connection}<div><span><i class:connected={connection.configured}></i><b>{connection.vendor}</b><small>{connection.source}</small></span>{#if connection.source==='personal'}<button onclick={()=>clearProviderSecret(connection.vendor)}>Clear personal key</button>{/if}</div>{/each}</div><div class="credential-form"><label>Provider<select bind:value={providerVendor}>{#each connections as connection}<option value={connection.vendor}>{connection.vendor}</option>{/each}</select></label><label>Personal key<input type="password" bind:value={providerSecret} autocomplete="off" placeholder="Stored securely after save"/></label><button class="primary" onclick={saveProviderSecret} disabled={!providerSecret.trim()}><KeyRound size={14}/>Store key</button></div></section></div></section></div>{/if}
+{#if showSettings}
+  <div class="modal-backdrop" role="presentation"><section class="settings-modal"><header><div><span class="eyebrow">LOCAL WORKSPACE</span><h2>Projects & connections</h2><p>Provider and storage secrets stay in Windows Credential Manager and are never returned.</p></div><button class="icon-btn" onclick={()=>showSettings=false}><X size={18}/></button></header><div class="settings-columns"><section><h3>Projects</h3>{#each projects as item}<div class="project-row" class:active={item.id===project?.id}><input value={item.name} onchange={(event)=>item.id===project?.id && renameProject((event.currentTarget as HTMLInputElement).value)} readonly={item.id!==project?.id}/><button class="subtle" onclick={()=>{loadProject(item.id);showSettings=false}}>Open</button><button class="icon-btn danger-icon" title="Delete project" onclick={()=>removeProject(item)}><Trash2 size={14}/></button></div>{/each}<div class="create-row"><input bind:value={newProjectName} placeholder="New project name"/><button class="primary" onclick={createStudioProject}><Plus size={14}/>Create</button></div></section><section><h3>Provider credentials</h3><div class="connection-list">{#each connections as connection}<div><span><i class:connected={connection.configured}></i><b>{connection.vendor}</b><small>{connection.source}</small></span>{#if connection.source==='personal'}<button onclick={()=>clearProviderSecret(connection.vendor)}>Clear personal key</button>{/if}</div>{/each}</div><div class="credential-form"><label>Provider<select bind:value={providerVendor}>{#each connections as connection}<option value={connection.vendor}>{connection.vendor}</option>{/each}</select></label><label>Personal key<input type="password" bind:value={providerSecret} autocomplete="off" placeholder="Stored securely after save"/></label><button class="primary" onclick={saveProviderSecret} disabled={!providerSecret.trim()}><KeyRound size={14}/>Store key</button></div><h3>Project storage</h3><p class="description">Local storage is always available. Connect B2 only for durable cloud copies and provider-readable image references.</p><div class="connection-list"><div><span><i class:connected={storageConnection?.configured}></i><b>{storageConnection?.configured ? storageConnection.bucket_name : 'Local only'}</b><small>{storageConnection?.configured ? `${storageConnection.region} · ${storageConnection.key_id_hint}` : 'No cloud credentials required'}</small></span>{#if storageConnection?.source==='personal'}<button onclick={clearStorageConnection}>Clear B2</button>{/if}</div></div><div class="credential-form"><label>Region<input bind:value={b2Region} placeholder="us-west-004"/></label><label>Bucket<input bind:value={b2BucketName} placeholder="thikra-studio"/></label><label>Key ID<input type="password" bind:value={b2KeyId} autocomplete="off"/></label><label>Application key<input type="password" bind:value={b2ApplicationKey} autocomplete="off"/></label><button class="primary" onclick={saveStorageConnection} disabled={!b2Region||!b2BucketName||!b2KeyId||!b2ApplicationKey}><KeyRound size={14}/>Connect B2</button></div></section></div></section></div>
+{/if}

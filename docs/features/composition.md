@@ -6,9 +6,9 @@
 > streams, resolution, frame rate, and duration. Composition behavior is
 > unchanged.
 
-> **Thikra Studio extension (2026-08-03):** `compose_studio()` accepts the graph's ordered selected visual and optional audio assets, performs the local download/mux work, uploads the result through `genblaze-s3`, and returns the original Genblaze `Asset`. The Studio executor calls it through `asyncio.to_thread`. This keeps all ffmpeg/ffprobe calls inside this module and does not introduce a response wrapper.
+> **Thikra Studio extension (2026-08-03):** `compose_studio()` accepts the graph's ordered selected visual and optional audio assets, performs the local mux work, persists the result in Studio's project directory, and returns the original Genblaze `Asset`. An optional B2 copy is made through `genblaze-s3` by the Studio persistence boundary. The executor calls composition through `asyncio.to_thread`. This keeps all ffmpeg/ffprobe calls inside this module and does not introduce a response wrapper.
 
-> **Multi-track editor extension:** `prepare_studio_asset()` owns ffprobe analysis plus thumbnail/proxy/waveform generation. `render_studio_sequence()` consumes an immutable sequence snapshot and composites ascending stored track order back-to-front, which the desktop presents in reverse so its highest compositing row is visibly frontmost. Version-2 transforms position, uniformly scale, and rotate both media and tightly bounded text/caption overlays; version-1 text coordinates are normalized in memory. The renderer trims and mixes every active unmuted source, emits progress from ffmpeg's machine-readable progress stream, and uploads the MP4/SRT through the existing storage backend. Cancellation terminates only the owned encoder process. These functions deliberately remain in `composer.py`, preserving it as the sole ffmpeg-family subprocess surface.
+> **Multi-track editor extension:** `prepare_studio_asset()` owns ffprobe analysis plus thumbnail/proxy/waveform generation. `render_studio_sequence()` consumes an immutable sequence snapshot and composites ascending stored track order back-to-front, which the desktop presents in reverse so its highest compositing row is visibly frontmost. Version-2 transforms position, uniformly scale, and rotate both media and tightly bounded text/caption overlays; version-1 text coordinates are normalized in memory. The renderer trims and mixes every active unmuted source, emits progress from ffmpeg's machine-readable progress stream, and saves the MP4/SRT locally before any optional B2 copy. Cancellation terminates only the owned encoder process. These functions deliberately remain in `composer.py`, preserving it as the sole ffmpeg-family subprocess surface.
 
 The final-MP4 step is the only non-Genblaze media surface in this
 sample. It exists because the SDK does not yet ship a composition
@@ -148,8 +148,7 @@ optional music.
 
 ## Failure mode
 
-If ffmpeg isn't on `PATH`, `compose_final` raises immediately with a
-hint pointing at `infra/README.md`. If ffmpeg runs but a stage exits
+Source development still requires ffmpeg on `PATH`; the installed desktop prepends its verified bundled FFmpeg directory to the engine-only `PATH`. If ffmpeg runs but a stage exits
 nonzero, the `RuntimeError` includes the captured `stderr` for fast
 diagnosis. All source assets are durable in B2 either way: each
 keyframe, clip, narration, music WAV, and the Stage B2 Manifest are all

@@ -72,8 +72,7 @@ def generate_workflow_proposal(
         }
     ]
     content.extend(
-        {"type": "image_url", "image_url": {"url": url, "detail": "low"}}
-        for url in asset_urls[:4]
+        {"type": "image_url", "image_url": {"url": url, "detail": "low"}} for url in asset_urls[:4]
     )
     response = chat(
         settings.chat_model,
@@ -525,4 +524,10 @@ def build_media_pipeline(
             "duration_sec": spec.total_duration_sec,
         },
     )
-    return p.step(music, model=music_model, modality=Modality.AUDIO, prompt=spec.music_prompt, duration=spec.total_duration_sec)
+    return p.step(
+        music,
+        model=music_model,
+        modality=Modality.AUDIO,
+        prompt=spec.music_prompt,
+        duration=spec.total_duration_sec,
+    )

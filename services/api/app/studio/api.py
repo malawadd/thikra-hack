@@ -58,6 +58,7 @@ from app.studio.schemas import (
     SequenceRestore,
     SequenceRevisionCreate,
     SequenceViewUpdate,
+    StorageConnectionSet,
 )
 from app.studio.service import (
     apply_proposal,
@@ -80,6 +81,11 @@ from app.studio.service import (
     serialize_proposal,
     serialize_revision,
     set_provider_secret,
+)
+from app.studio.storage_connection import (
+    clear_storage_connection,
+    set_storage_connection,
+    storage_connection_status,
 )
 from app.thikra.database import get_db
 
@@ -662,17 +668,15 @@ def asset_content(asset_id: str, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=404, detail={"code": "ASSET_NOT_FOUND", "message": "Studio asset not found"}
         )
-    if asset.remote_url:
-        from app.repo.pipelines import presign_asset_url
-
-        return RedirectResponse(presign_asset_url(asset.remote_url), status_code=302)
     path = Path(asset.local_path or "").resolve()
-    if not path.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "ASSET_CONTENT_MISSING", "message": "Studio asset content is missing"},
-        )
-    return FileResponse(path, media_type=asset.content_type, filename=asset.name)
+    if path.is_file():
+        return FileResponse(path, media_type=asset.content_type, filename=asset.name)
+    if asset.remote_url:
+        return RedirectResponse(_presign_studio_asset(asset.remote_url), status_code=302)
+    raise HTTPException(
+        status_code=404,
+        detail={"code": "ASSET_CONTENT_MISSING", "message": "Studio asset content is missing"},
+    )
 
 
 @router.get("/assets/{asset_id}/thumbnail")
@@ -742,9 +746,17 @@ def download_asset(asset_id: str, db: Session = Depends(get_db)):
             status_code=404,
             detail={"code": "ASSET_CONTENT_MISSING", "message": "Studio asset content is missing"},
         )
-    from app.repo.pipelines import presign_asset_url
+    return RedirectResponse(_presign_studio_asset(asset.remote_url), status_code=302)
 
-    return RedirectResponse(presign_asset_url(asset.remote_url), status_code=302)
+
+def _presign_studio_asset(url: str) -> str:
+    from app.repo.pipelines import presign_asset_url
+    from app.studio.storage_connection import studio_presign_asset_url
+
+    try:
+        return studio_presign_asset_url(url)
+    except (RuntimeError, ValueError):
+        return presign_asset_url(url)
 
 
 def _sequence(db: Session, sequence_id: str) -> StudioSequence:
@@ -1370,3 +1382,31 @@ def delete_connection(vendor: str):
             status_code=404, detail={"code": "PROVIDER_NOT_FOUND", "message": str(exc)}
         ) from exc
     return {"vendor": vendor, "configured": False}
+
+
+@router.get("/storage-connection")
+def get_storage_connection():
+    return storage_connection_status()
+
+
+@router.put("/storage-connection")
+def put_storage_connection(request: StorageConnectionSet):
+    try:
+        set_storage_connection(
+            region=request.region,
+            key_id=request.key_id,
+            application_key=request.application_key,
+            bucket_name=request.bucket_name,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "STORAGE_CONNECTION_FAILED", "message": str(exc)},
+        ) from exc
+    return storage_connection_status()
+
+
+@router.delete("/storage-connection")
+def delete_storage_connection():
+    clear_storage_connection()
+    return storage_connection_status()

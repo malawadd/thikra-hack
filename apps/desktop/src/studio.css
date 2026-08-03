@@ -1,4 +1,5 @@
 :root { font-family: "Noto Sans", "Noto Sans Arabic", "Segoe UI", system-ui, sans-serif; color: #eef0f7; background: #0a0c10; font-synthesis: none; --panel:#11141b; --panel-2:#171a23; --line:#282c36; --muted:#8d93a3; --violet:#9c7cff; --cyan:#69d7e8; }
+.startup-actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
 body { min-width: 1040px; background: radial-gradient(circle at 50% -20%, #242138 0, #0a0c10 42%); }

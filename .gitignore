@@ -28,6 +28,11 @@ __pycache__/
 *.egg-info/
 services/api/thikra.db
 services/api/.thikra/
+services/api/dist/
+services/api/build/
+apps/desktop/src-tauri/resources/runtime/*
+!apps/desktop/src-tauri/resources/runtime/.gitkeep
+artifacts/desktop-release/
 
 # Caches
 .cache/

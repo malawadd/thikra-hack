@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
+import os
 import sys
 import traceback
 import uuid
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from pathlib import Path
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
@@ -143,9 +146,19 @@ def setup_logging(level: int | str = logging.INFO) -> None:
     """
     if isinstance(level, str):
         level = logging.getLevelNamesMapping().get(level.upper(), logging.INFO)
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter())
-    logging.root.handlers = [handler]
+    formatter = JSONFormatter()
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    log_path = os.environ.get("THIKRA_LOG_PATH")
+    if log_path:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                log_path, maxBytes=5 * 1024 * 1024, backupCount=4, encoding="utf-8"
+            )
+        )
+    for handler in handlers:
+        handler.setFormatter(formatter)
+    logging.root.handlers = handlers
     logging.root.setLevel(level)
     is_debug = level <= logging.DEBUG
     for name, lvl in {
