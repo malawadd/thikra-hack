@@ -59,7 +59,7 @@ def test_editor_render_layers_transforms_audio_captions_and_srt(tmp_path: Path) 
                 "transition_out": "fade_black",
                 "transition_duration_ms": 300,
                 "transform": {
-                    "fit": "fill",
+                    "fit": "fit",
                     "position_x": 0.4,
                     "position_y": 0.6,
                     "scale": 1.1,
@@ -125,7 +125,9 @@ def test_editor_render_layers_transforms_audio_captions_and_srt(tmp_path: Path) 
             cancelled=lambda: False,
         )
     graph = calls[0][calls[0].index("-filter_complex") + 1]
-    assert "zoompan=" in graph and "rotate=" in graph and "overlay=(W-w)*0.4" in graph
+    assert "zoompan=" in graph and "rotate=" in graph and "overlay=W*0.4-w/2:H*0.6-h/2" in graph
+    assert "color=black@0" in graph
+    assert "overlay=W*0.5-w/2:H*0.86-h/2" in graph
     assert "anullsrc" in graph  # exported MP4 always includes an AAC track
     assert video.media_type == "video/mp4"
     assert srt is not None and srt.media_type == "application/x-subrip"

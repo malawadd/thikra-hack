@@ -51,7 +51,7 @@ def _dump(value: Any) -> str:
 def default_document(preset: SequencePreset = "landscape_1080") -> SequenceDocument:
     return SequenceDocument.model_validate(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "preset": preset,
             "tracks": [
                 {"id": "v1", "name": "Video 1", "kind": "visual", "order": 0},
@@ -62,6 +62,19 @@ def default_document(preset: SequencePreset = "landscape_1080") -> SequenceDocum
             ],
         }
     )
+
+
+def upgrade_document(document: SequenceDocument) -> SequenceDocument:
+    """Normalize a historical timeline without mutating its stored revision."""
+    if document.schema_version == 2:
+        return document
+    payload = document.model_dump(mode="json")
+    payload["schema_version"] = 2
+    for clip in payload["clips"]:
+        if clip["kind"] in {"text", "caption"} and clip.get("text"):
+            clip["transform"]["position_x"] = clip["text"].get("position_x", 0.5)
+            clip["transform"]["position_y"] = clip["text"].get("position_y", 0.82)
+    return SequenceDocument.model_validate(payload)
 
 
 def _seed_latest_video(db: Session, project_id: str, document: SequenceDocument) -> None:
@@ -177,6 +190,7 @@ def create_revision(
 ) -> SequenceRevision:
     if sequence.current_revision_id != base_revision_id:
         raise RuntimeError("STALE_REVISION")
+    document = upgrade_document(document)
     validate_sources(db, sequence.project_id, document)
     payload = document.model_dump(mode="json")
     encoded = _dump(payload)
@@ -246,7 +260,7 @@ def restore_revision(
     old = db.get(SequenceRevision, revision_id)
     if old is None or old.sequence_id != sequence.id:
         raise ValueError("Revision not found in this sequence")
-    document = SequenceDocument.model_validate(json.loads(old.timeline_json))
+    document = upgrade_document(SequenceDocument.model_validate(json.loads(old.timeline_json)))
     return create_revision(
         db,
         sequence,
@@ -362,7 +376,7 @@ def create_render(
     *,
     resumed_from: str | None = None,
 ) -> StudioRender:
-    document = SequenceDocument.model_validate(json.loads(revision.timeline_json))
+    document = upgrade_document(SequenceDocument.model_validate(json.loads(revision.timeline_json)))
     validate_sources(db, sequence.project_id, document)
     hashes = sorted(
         asset.sha256
@@ -415,7 +429,9 @@ def execute_render(render_id: str) -> None:
         if render is None or render.status == "SUCCEEDED":
             return
         revision = db.get(SequenceRevision, render.revision_id)
-        document = SequenceDocument.model_validate(json.loads(revision.timeline_json))
+        document = upgrade_document(
+            SequenceDocument.model_validate(json.loads(revision.timeline_json))
+        )
         asset_ids = [clip.asset_id for clip in document.clips if clip.asset_id]
         assets = {
             asset.id: {
@@ -900,7 +916,7 @@ def caption_estimate(
     revision = db.get(SequenceRevision, revision_id)
     if revision is None or revision.sequence_id != sequence.id:
         raise ValueError("Sequence revision not found")
-    document = SequenceDocument.model_validate(json.loads(revision.timeline_json))
+    document = upgrade_document(SequenceDocument.model_validate(json.loads(revision.timeline_json)))
     duration_ms = max((clip.start_ms + clip.duration_ms for clip in document.clips), default=0)
     estimated = max(1, (duration_ms + 59_999) // 60_000)
     config = {
@@ -987,7 +1003,9 @@ def execute_caption_job(job_id: str) -> None:
         db.commit()
         try:
             revision = db.get(SequenceRevision, job.revision_id)
-            document = SequenceDocument.model_validate(json.loads(revision.timeline_json))
+            document = upgrade_document(
+                SequenceDocument.model_validate(json.loads(revision.timeline_json))
+            )
             if settings.app_mode.upper() == "DEMO":
                 duration = max(
                     (clip.start_ms + clip.duration_ms for clip in document.clips), default=4000
@@ -1054,7 +1072,7 @@ def apply_caption_cues(
     if sequence.current_revision_id != base_revision_id:
         raise RuntimeError("STALE_REVISION")
     revision = db.get(SequenceRevision, base_revision_id)
-    document = SequenceDocument.model_validate(json.loads(revision.timeline_json))
+    document = upgrade_document(SequenceDocument.model_validate(json.loads(revision.timeline_json)))
     caption_track = next((track for track in document.tracks if track.kind == "caption"), None)
     if caption_track is None:
         raise ValueError("Sequence has no caption track")
@@ -1074,6 +1092,7 @@ def apply_caption_cues(
                     "name": f"Caption {index + 1}",
                     "start_ms": start,
                     "duration_ms": end - start,
+                    "transform": {"position_x": 0.5, "position_y": 0.86},
                     "text": {
                         "content": text,
                         "font_family": "Noto Sans Arabic",
@@ -1101,7 +1120,7 @@ def create_sequence_proposal(
     if sequence.current_revision_id != base_revision_id:
         raise RuntimeError("STALE_REVISION")
     revision = db.get(SequenceRevision, base_revision_id)
-    document = SequenceDocument.model_validate(json.loads(revision.timeline_json))
+    document = upgrade_document(SequenceDocument.model_validate(json.loads(revision.timeline_json)))
     known = {clip.id for clip in document.clips}
     if set(selected_clip_ids) - known:
         raise ValueError("Proposal selection contains unknown clips")
@@ -1240,7 +1259,7 @@ def apply_sequence_proposal(
             payload["clips"] = [
                 item for item in payload["clips"] if item["id"] != operation.clip_id
             ]
-    document = SequenceDocument.model_validate(payload)
+    document = upgrade_document(SequenceDocument.model_validate(payload))
     revision = create_revision(
         db,
         sequence,

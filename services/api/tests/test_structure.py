@@ -120,7 +120,7 @@ def test_pipelines_line_budget() -> None:
 
 
 def test_composer_line_budget() -> None:
-    """`repo/composer.py` must stay below 450 lines.
+    """`repo/composer.py` must stay within its reviewed media-boundary budget.
 
     Bumped 250 → 290 for ffmpeg timing logs + per-download size logs +
     timeout-specific exception handler. Bumped 290 → 380 for best-effort
@@ -140,10 +140,13 @@ def test_composer_line_budget() -> None:
     lines = (APP_ROOT / "repo" / "composer.py").read_text().splitlines()
     # Bumped 570 → 650 for the Studio one-visual composition primitive. Bumped
     # 650 → 1050 for the editor's metadata, proxy, thumbnail, progress-aware
-    # multi-track render, audible-mix extraction, caption, and upload primitives. Keeping these here is
-    # intentional: composer.py remains the sole ffmpeg/ffprobe subprocess
-    # boundary, and the budget still prevents unbounded orchestration growth.
-    assert len(lines) < 1050, f"composer.py is {len(lines)} lines — budget is 1050"
+    # multi-track render, audible-mix extraction, caption, and upload primitives.
+    # Bumped 1050 → 1300 after standard formatting plus shared text/media
+    # geometry made the editor preview and export use the same layer transform.
+    # Keeping these here is intentional: composer.py remains the sole
+    # ffmpeg/ffprobe subprocess boundary, and the budget still prevents
+    # unbounded orchestration growth.
+    assert len(lines) < 1300, f"composer.py is {len(lines)} lines — budget is 1300"
 
 
 def test_main_line_budget() -> None:

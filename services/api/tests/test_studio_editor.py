@@ -81,6 +81,29 @@ def test_timeline_limits_types_transitions_and_duration() -> None:
         raise AssertionError("text was accepted on an audio track")
 
 
+def test_legacy_text_geometry_is_normalized_without_mutating_history() -> None:
+    payload = editor.default_document().model_dump(mode="json")
+    payload["schema_version"] = 1
+    payload["clips"] = [
+        {
+            "id": "legacy-title",
+            "track_id": "titles",
+            "kind": "text",
+            "name": "Legacy title",
+            "start_ms": 0,
+            "duration_ms": 1200,
+            "text": {"content": "قديم", "position_x": 0.2, "position_y": 0.3},
+        }
+    ]
+    legacy = SequenceDocument.model_validate(payload)
+    normalized = editor.upgrade_document(legacy)
+    assert legacy.schema_version == 1
+    assert legacy.clips[0].transform.position_x == 0.5
+    assert normalized.schema_version == 2
+    assert normalized.clips[0].transform.position_x == 0.2
+    assert normalized.clips[0].transform.position_y == 0.3
+
+
 def test_source_ranges_and_unsupported_overlap_are_rejected() -> None:
     db = _database()
     project = _project(db)

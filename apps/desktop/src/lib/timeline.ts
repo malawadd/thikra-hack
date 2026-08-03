@@ -1,4 +1,58 @@
-import type { SequenceClip, StudioRender } from './types';
+import type { ClipKind, SequenceClip, SequenceDocument, SequenceTrack, StudioRender, TrackKind } from './types';
+
+export const isCompositingTrack = (track: SequenceTrack) => track.kind !== 'audio';
+
+export function displayedTracks(tracks: SequenceTrack[]): SequenceTrack[] {
+  const compositing = tracks.filter(isCompositingTrack).sort((a, b) => b.order - a.order);
+  const audio = tracks.filter((track) => track.kind === 'audio').sort((a, b) => a.order - b.order);
+  return [...compositing, ...audio];
+}
+
+export function compatibleTrackKind(kind: ClipKind): TrackKind {
+  if (kind === 'image' || kind === 'video') return 'visual';
+  return kind;
+}
+
+export const trackAcceptsClip = (track: SequenceTrack, clip: SequenceClip) =>
+  !track.locked && track.kind === compatibleTrackKind(clip.kind);
+
+export function normalizeTrackOrders(tracks: SequenceTrack[], backToFrontIds?: string[]): SequenceTrack[] {
+  const ids = backToFrontIds ?? [...tracks].sort((a, b) => a.order - b.order).map((track) => track.id);
+  const order = new Map(ids.map((id, index) => [id, index]));
+  return tracks.map((track) => ({ ...track, order: order.get(track.id) ?? track.order }));
+}
+
+export function clipsCollide(
+  candidate: SequenceClip,
+  clips: SequenceClip[],
+  ignoredIds: ReadonlySet<string> = new Set(),
+): boolean {
+  return clips.some((other) => {
+    if (other.id === candidate.id || ignoredIds.has(other.id) || other.track_id !== candidate.track_id) return false;
+    const overlap = Math.min(candidate.start_ms + candidate.duration_ms, other.start_ms + other.duration_ms)
+      - Math.max(candidate.start_ms, other.start_ms);
+    if (overlap <= 0) return false;
+    return overlap > Math.max(candidate.transition_duration_ms, other.transition_duration_ms);
+  });
+}
+
+export function upgradeSequenceDocument(document: SequenceDocument): SequenceDocument {
+  const upgraded = structuredClone(document);
+  if (upgraded.schema_version === 1) {
+    upgraded.schema_version = 2;
+    upgraded.clips = upgraded.clips.map((clip) => clip.kind === 'text' || clip.kind === 'caption'
+      ? {
+          ...clip,
+          transform: {
+            ...clip.transform,
+            position_x: clip.text?.position_x ?? .5,
+            position_y: clip.text?.position_y ?? .82,
+          },
+        }
+      : clip);
+  }
+  return upgraded;
+}
 
 export const snapFrame = (milliseconds: number, fps = 30) =>
   Math.max(0, Math.round(milliseconds / (1000 / fps)) * (1000 / fps));

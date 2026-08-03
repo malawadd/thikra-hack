@@ -159,8 +159,12 @@ class ProviderConnectionSet(StrictModel):
 
 
 SequencePreset = Literal[
-    "landscape_720", "landscape_1080", "portrait_720", "portrait_1080",
-    "square_720", "square_1080",
+    "landscape_720",
+    "landscape_1080",
+    "portrait_720",
+    "portrait_1080",
+    "square_720",
+    "square_1080",
 ]
 TrackKind = Literal["visual", "text", "caption", "audio"]
 ClipKind = Literal["video", "image", "text", "caption", "audio"]
@@ -236,7 +240,7 @@ class SequenceClip(StrictModel):
 
 
 class SequenceDocument(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     preset: SequencePreset = "landscape_1080"
     background: str = Field(default="#05070a", pattern=r"^#[0-9A-Fa-f]{6}$")
     tracks: list[SequenceTrack] = Field(min_length=1, max_length=16)
@@ -256,8 +260,10 @@ class SequenceDocument(StrictModel):
             raise ValueError("clip ids must be unique")
         by_track = {track.id: track for track in self.tracks}
         compatible = {
-            "visual": {"video", "image"}, "text": {"text"},
-            "caption": {"caption"}, "audio": {"audio"},
+            "visual": {"video", "image"},
+            "text": {"text"},
+            "caption": {"caption"},
+            "audio": {"audio"},
         }
         for clip in self.clips:
             track = by_track.get(clip.track_id)
@@ -348,8 +354,16 @@ class SequenceProposalCreate(StrictModel):
 class SequenceProposalOperation(StrictModel):
     id: str
     type: Literal[
-        "add_track", "update_track", "remove_track", "add_clip", "update_clip",
-        "move_clip", "remove_clip", "add_caption", "update_caption", "remove_caption",
+        "add_track",
+        "update_track",
+        "remove_track",
+        "add_clip",
+        "update_clip",
+        "move_clip",
+        "remove_clip",
+        "add_caption",
+        "update_caption",
+        "remove_caption",
     ]
     track_id: str | None = None
     clip_id: str | None = None
