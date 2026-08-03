@@ -71,6 +71,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 272px minmax(0, 1fr); }
+.public-shell { min-height: 100vh; }
 .sidebar {
   position: sticky;
   top: 0;

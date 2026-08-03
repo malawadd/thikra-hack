@@ -16,7 +16,7 @@
     catch { backendReady = false; }
   });
   const nav = [
-    { href: '/', label: 'Overview', icon: Gauge },
+    { href: '/overview', label: 'Overview', icon: Gauge },
     { href: '/services', label: 'Marketplace', icon: Store },
     { href: '/developers', label: 'Agent Gateway', icon: Bot },
     { href: '/commercial-orders', label: 'Commercial Orders', icon: BriefcaseBusiness },
@@ -30,12 +30,15 @@
     { href: '/cases', label: 'Cases', icon: BriefcaseBusiness },
     { href: '/integrations', label: 'Integrations', icon: Blocks }
   ];
-  const active = (href: string) => href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);
+  const active = (href: string) => page.url.pathname.startsWith(href);
   function navigate(href: string) { menuOpen = false; void goto(href); }
 </script>
 
 <svelte:head><title>Thikra · Verify-Then-Pay Creative Commerce</title></svelte:head>
 
+{#if page.url.pathname === '/'}
+  <div class="public-shell" data-hydrated={hydrated}>{@render children()}</div>
+{:else}
 <div class="app-shell" data-hydrated={hydrated}>
   <aside class:open={menuOpen} class="sidebar" aria-label="Primary navigation">
     <div class="brand">
@@ -65,3 +68,4 @@
     <div class="content">{@render children()}</div>
   </main>
 </div>
+{/if}

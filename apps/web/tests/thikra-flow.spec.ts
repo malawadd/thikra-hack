@@ -3,8 +3,21 @@ import { expect, test } from '@playwright/test';
 const waitForHydration = (page: import('@playwright/test').Page) =>
   expect(page.locator('.app-shell[data-hydrated="true"]')).toBeVisible({ timeout: 20_000 });
 
-test('Noura Glow verify-then-pay demo reaches evidence-backed approval', async ({ page }) => {
+test('landing introduces the agent-first Thikra product story', async ({ page }) => {
   await page.goto('/');
+  await expect(page.locator('.public-shell[data-hydrated="true"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: 'From agent intent to finished media.' })).toBeVisible();
+  await expect(page.getByText('Powered by Genblaze. Grounded in B2.')).toBeVisible();
+  await expect(page.getByRole('link', { name: /Connect an agent/ }).first()).toHaveAttribute('href', '/developers');
+  await page.getByRole('link', { name: /Explore Thikra Studio/ }).click();
+  await expect(page.getByRole('tab', { name: 'Studio' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('heading', { name: 'Generate in a typed node graph. Finish in a real timeline.' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Web console' }).click();
+  await expect(page.getByRole('heading', { name: 'The receipts stay visible after generation.' })).toBeVisible();
+});
+
+test('Noura Glow verify-then-pay demo reaches evidence-backed approval', async ({ page }) => {
+  await page.goto('/overview');
   await waitForHydration(page);
   await expect(page.getByText('Backend evidence online')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('heading', { name: 'Creative commerce, with receipts.' })).toBeVisible();
@@ -52,7 +65,7 @@ test('Noura Glow verify-then-pay demo reaches evidence-backed approval', async (
   await expect(page.getByText(/Resolved/).first()).toBeVisible();
 });
 
-test('human marketplace order reaches signed verified delivery', async ({ page }) => {
+test('human marketplace order reaches its secure Prava payment handoff', async ({ page }) => {
   await page.goto('/services');
   await waitForHydration(page);
   await expect(page.getByRole('heading', { name: 'Outcomes an agent can actually buy.' })).toBeVisible();
@@ -66,13 +79,11 @@ test('human marketplace order reaches signed verified delivery', async ({ page }
   await expect(page.getByText('Quoted total')).toBeVisible();
   await page.getByRole('button', { name: 'Accept quote & create order' }).click();
   await page.getByRole('link', { name: 'Continue to payment' }).click();
-  await expect(page.getByRole('button', { name: 'Create bounded authorization' })).toBeVisible();
-  await page.getByRole('button', { name: 'Create bounded authorization' }).click();
-  await page.getByRole('button', { name: 'Approve simulated demo payment' }).click();
-  await page.getByRole('button', { name: 'Start paid fulfillment' }).click();
-  await page.getByRole('button', { name: /Retry failed component/ }).click();
-  await expect(page.getByText('Verified deliverables')).toBeVisible();
-  await expect(page.getByText('Signed payment-to-delivery receipt')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create secure Prava checkout' })).toBeVisible();
+  await page.getByRole('button', { name: 'Create secure Prava checkout' }).click();
+  await expect(page.getByText('Payment: Awaiting User Approval')).toBeVisible();
+  await expect(page.getByText(/Awaiting the secure Prava checkout/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create fresh checkout session' })).toBeVisible();
 });
 
 test('marketplace remains usable at a mobile viewport', async ({ page }, testInfo) => {
